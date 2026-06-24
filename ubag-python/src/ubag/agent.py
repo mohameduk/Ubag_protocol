@@ -1,58 +1,90 @@
 """
 AgentCredential — client-side helper for MCP agent developers.
 
+An agent's identity IS its Ed25519 keypair. To get into a UBAG-enabled site the
+agent solves the site's nonce challenge by signing it with its private key; the
+site (or central issuer) returns a credential the agent then carries.
+
 Usage:
     from ubag import AgentCredential
 
-    cred = AgentCredential(subject="my-agent-v1", secret_key="shared-secret")
-    headers = cred.headers()   # attach to every request
+    agent = AgentCredential.generate(owner="me@example.com")   # once; persist agent.export()
+    # ... on a 429 challenge from a site:
+    solution = agent.solve_challenge(challenge)                 # POST to /ubag/verify
+    agent.set_credential(resp["credential"])                   # store what you get back
+    headers = agent.headers()                                   # attach to future requests
 """
 from __future__ import annotations
 
-from ubag._credential import CREDENTIAL_HEADER, issue_credential, validate_credential
+from typing import Optional
+
+from ubag._credential import CREDENTIAL_HEADER
+from ubag._keys import agent_id, agent_sign, generate_agent_keypair
 
 
 class AgentCredential:
-    """
-    Represents an agent's UBAG credential.
-
-    The secret_key must match the one configured in the UBAGMiddleware
-    on the target website, OR be issued by ubagprotocol.com/credential.
-    """
+    """Holds an agent's identity keypair and (once obtained) its credential token."""
 
     def __init__(
         self,
-        subject: str,
-        secret_key: str,
+        private_key: str,
+        public_key: str,
+        owner: str = "",
         agent_class: str = "mcp_agent",
-        ttl: int = 300,
-        allowed_paths: list[str] | None = None,
     ) -> None:
-        self.subject       = subject
-        self.secret_key    = secret_key
-        self.agent_class   = agent_class
-        self.ttl           = ttl
-        self.allowed_paths = allowed_paths or ["/*"]
-        self._token: str | None = None
+        self.private_key = private_key
+        self.public_key = public_key
+        self.owner = owner
+        self.agent_class = agent_class
+        self.agent_id = agent_id(public_key)
+        self._token: Optional[str] = None
 
-    def token(self) -> str:
-        """Return a valid token, re-issuing if expired."""
-        if self._token:
-            claims = validate_credential(self._token, self.secret_key)
-            if claims:
-                return self._token
-        self._token = issue_credential(
-            subject=self.subject,
-            secret_key=self.secret_key,
-            agent_class=self.agent_class,
-            ttl=self.ttl,
-            allowed_paths=self.allowed_paths,
+    @classmethod
+    def generate(cls, owner: str = "", agent_class: str = "mcp_agent") -> "AgentCredential":
+        """Create a brand-new agent identity (fresh Ed25519 keypair)."""
+        priv, pub = generate_agent_keypair()
+        return cls(private_key=priv, public_key=pub, owner=owner, agent_class=agent_class)
+
+    def export(self) -> dict[str, str]:
+        """Serialize the identity for persistence. Keep `private_key` secret."""
+        return {
+            "private_key": self.private_key,
+            "public_key": self.public_key,
+            "owner": self.owner,
+            "agent_class": self.agent_class,
+        }
+
+    @classmethod
+    def load(cls, data: dict) -> "AgentCredential":
+        return cls(
+            private_key=data["private_key"],
+            public_key=data["public_key"],
+            owner=data.get("owner", ""),
+            agent_class=data.get("agent_class", "mcp_agent"),
         )
-        return self._token
+
+    def solve_challenge(self, challenge: dict) -> dict:
+        """Sign a site's nonce challenge. Returns the body to POST to /ubag/verify."""
+        nonce = challenge["nonce"]
+        return {
+            "nonce": nonce,
+            "timestamp": challenge["timestamp"],
+            "stamp": challenge["stamp"],
+            "agent_public": self.public_key,
+            "signature": agent_sign(self.private_key, nonce.encode()),
+        }
+
+    def set_credential(self, token: str) -> None:
+        """Store the credential returned by /ubag/verify."""
+        self._token = token
 
     def headers(self) -> dict[str, str]:
-        """Return headers dict to attach to every HTTP request."""
-        return {CREDENTIAL_HEADER: self.token()}
+        """Headers to attach to requests once a credential has been obtained."""
+        if not self._token:
+            raise RuntimeError(
+                "No credential yet — solve a site challenge and call set_credential() first."
+            )
+        return {CREDENTIAL_HEADER: self._token}
 
     def __repr__(self) -> str:
-        return f"AgentCredential(subject={self.subject!r}, agent_class={self.agent_class!r})"
+        return f"AgentCredential(agent_id={self.agent_id!r}, agent_class={self.agent_class!r})"

@@ -2,25 +2,26 @@
 import pytest
 from ubag._routing import RoutingBranch, resolve_branch
 from ubag._credential import issue_credential, validate_credential
+from ubag._keys import generate_issuer_keypair
 
-SECRET = "test-secret-32-chars-minimum-ok!"
+ISSUER_PRIV, ISSUER_PUB = generate_issuer_keypair()
 
 
 def _validate(token):
-    return validate_credential(token, SECRET)
+    return validate_credential(token, ISSUER_PUB)
 
 
 def test_valid_credential_routes_to_agent():
-    token = issue_credential("test-agent", SECRET)
+    token = issue_credential("ubag:test-agent", ISSUER_PRIV)
     branch = resolve_branch("python-httpx/0.27", "*/*", token, _validate)
     assert branch == RoutingBranch.AGENT
 
 
 def test_expired_credential_routes_to_sandbox():
-    import jwt, time
+    import jwt
     expired = jwt.encode(
         {"sub": "agent", "iat": 0, "exp": 1, "agent_class": "test", "paths": ["/*"]},
-        SECRET, algorithm="HS256"
+        ISSUER_PRIV, algorithm="ES256"
     )
     branch = resolve_branch("python-httpx/0.27", "*/*", expired, _validate)
     assert branch == RoutingBranch.SANDBOX

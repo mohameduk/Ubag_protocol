@@ -7,9 +7,18 @@ from ubag._routing import RoutingBranch, resolve_branch
 from ubag._credential import issue_credential, validate_credential, CREDENTIAL_HEADER
 from ubag._challenge import generate_challenge, verify_challenge
 from ubag._agents_json import build_agents_json
+from ubag._keys import (
+    generate_agent_keypair,
+    generate_issuer_keypair,
+    issuer_public_from_private,
+    agent_id,
+    agent_sign,
+    agent_verify,
+    build_jwks,
+)
 from ubag.agent import AgentCredential
 
-__version__ = "0.1.0"
+__version__ = "0.2.0"
 __all__ = [
     "UBAGMiddleware",
     "AgentCredential",
@@ -21,6 +30,13 @@ __all__ = [
     "verify_challenge",
     "build_agents_json",
     "CREDENTIAL_HEADER",
+    "generate_agent_keypair",
+    "generate_issuer_keypair",
+    "issuer_public_from_private",
+    "agent_id",
+    "agent_sign",
+    "agent_verify",
+    "build_jwks",
 ]
 
 # Lazy import so FastAPI/Starlette is optional

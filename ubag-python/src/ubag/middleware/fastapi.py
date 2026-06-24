@@ -19,6 +19,7 @@ Usage:
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 from typing import Any, Callable, Optional
@@ -29,8 +30,9 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse, Response
 
 from ubag._agents_json import build_agents_json
-from ubag._challenge import generate_challenge
-from ubag._credential import CREDENTIAL_HEADER, validate_credential
+from ubag._challenge import generate_challenge, verify_challenge
+from ubag._credential import CREDENTIAL_HEADER, issue_credential, validate_credential
+from ubag._keys import issuer_public_from_private
 from ubag._routing import RoutingBranch, resolve_branch
 from ubag._sux import build_jsonld_response
 
@@ -56,7 +58,9 @@ class UBAGMiddleware(BaseHTTPMiddleware):
         self,
         app,
         origin: str = "",
-        secret_key: str = "",
+        issuer_key: str = "",
+        issuer_public_key: str = "",
+        server_secret: str = "",
         site_meta: dict[str, Any] | None = None,
         credential_endpoint: str = "https://ubagprotocol.com/credential",
         audit_fn: Optional[Callable] = None,
@@ -64,7 +68,19 @@ class UBAGMiddleware(BaseHTTPMiddleware):
     ) -> None:
         super().__init__(app)
         self.origin              = origin.rstrip("/")
-        self.secret_key          = secret_key or os.getenv("UBAG_SECRET_KEY", "change-me")
+        # Issuer private key (EC P-256 PEM) lets this site MINT credentials; the public
+        # key (derived from it) is used to VERIFY. A verify-only site can pass
+        # issuer_public_key alone — no secret required to validate, the OAuth/JWKS model.
+        self.issuer_private      = issuer_key or os.getenv("UBAG_ISSUER_KEY", "")
+        if self.issuer_private:
+            self.issuer_public = issuer_public_from_private(self.issuer_private)
+        else:
+            self.issuer_public = issuer_public_key or os.getenv("UBAG_ISSUER_PUBLIC", "")
+        # HMAC key for stateless nonce stamping — the server signing to itself.
+        self.server_secret       = (
+            server_secret or os.getenv("UBAG_SERVER_SECRET")
+            or hashlib.sha256((self.issuer_private or "ubag-stamp").encode()).hexdigest()
+        )
         self.site_meta           = site_meta or {}
         self.credential_endpoint = credential_endpoint
         self.audit_fn            = audit_fn
@@ -95,7 +111,7 @@ class UBAGMiddleware(BaseHTTPMiddleware):
             user_agent=ua,
             accept=accept,
             credential_token=cred_token,
-            validate_fn=lambda t: validate_credential(t, self.secret_key),
+            validate_fn=lambda t: validate_credential(t, self.issuer_public),
         )
 
         if branch == RoutingBranch.AGENT:
@@ -121,7 +137,7 @@ class UBAGMiddleware(BaseHTTPMiddleware):
     # ------------------------------------------------------------------
 
     def _branch_b(self, request: Request, token: str) -> JSONResponse:
-        claims  = validate_credential(token, self.secret_key)
+        claims  = validate_credential(token, self.issuer_public)
         host    = request.headers.get("host", "").split(":")[0]
         payload = build_jsonld_response(
             host=host,
@@ -180,8 +196,7 @@ class UBAGMiddleware(BaseHTTPMiddleware):
     # ------------------------------------------------------------------
 
     def _branch_c(self, request: Request) -> JSONResponse:
-        client_ip = request.client.host if request.client else "unknown"
-        challenge = generate_challenge(self.secret_key, client_ip)
+        challenge = generate_challenge(self.server_secret)
         return JSONResponse(
             status_code=429,
             content={
@@ -203,27 +218,37 @@ class UBAGMiddleware(BaseHTTPMiddleware):
         except Exception:
             return JSONResponse(status_code=400, content={"error": "invalid_json"})
 
-        ok, reason = verify_challenge(
-            secret_key=self.secret_key,
-            nonce_id=body.get("nonce_id", ""),
+        ok, reason, aid = verify_challenge(
+            server_secret=self.server_secret,
+            nonce=body.get("nonce", ""),
             timestamp=int(body.get("timestamp", 0)),
-            mac=body.get("mac", ""),
-            signed_nonce=body.get("signed_nonce", ""),
-            delta_ms=float(body.get("delta_ms", 0)),
+            stamp=body.get("stamp", ""),
+            agent_public=body.get("agent_public", ""),
+            signature=body.get("signature", ""),
         )
 
         if not ok:
             return JSONResponse(status_code=403, content={"status": "failed", "reason": reason})
 
-        subject = body.get("agent_id") or request.client.host or "unknown"
-        token   = __import__("ubag._credential", fromlist=["issue_credential"]).issue_credential(
-            subject=subject,
-            secret_key=self.secret_key,
+        if not self.issuer_private:
+            # Identity proven, but this site doesn't mint credentials itself —
+            # point the agent at the central issuer.
+            return JSONResponse(status_code=200, content={
+                "status": "verified",
+                "agent_id": aid,
+                "credential_endpoint": self.credential_endpoint,
+                "message": "Identity verified. Obtain a credential from credential_endpoint.",
+            })
+
+        token = issue_credential(
+            subject=aid,
+            issuer_private_pem=self.issuer_private,
+            agent_public=body.get("agent_public", ""),
         )
 
         if self.on_verified:
             try:
-                claims = validate_credential(token, self.secret_key)
+                claims = validate_credential(token, self.issuer_public)
                 self.on_verified(claims, request)
             except Exception:
                 pass

@@ -1,11 +1,17 @@
 """
-Branch C — Cryptographic sandbox challenge.
+Branch C — agent identity challenge (asymmetric).
 
-Unknown agents receive a nonce they must sign with HMAC-SHA256.
-Agents that solve the challenge can be issued a credential.
+An unknown agent is issued a one-time nonce. It proves control of its identity
+key by signing the nonce with its Ed25519 PRIVATE key; the server verifies with
+the agent's PUBLIC key. That is what establishes *who* the agent is — knowledge
+of a shared secret never could.
 
-Anti-replay: nonces are one-time use. The caller is responsible for
-persisting used nonces (pass a `store` dict or implement UBAGNonceStore).
+The nonce carries a server-side HMAC `stamp` so the server can confirm it issued
+the nonce without storing it (stateless issuance). That HMAC is the server signing
+to *itself* — it is not part of the identity proof.
+
+Replay: nonces are one-time. Provide a shared `store` (Redis/DB) in multi-process
+deployments; the in-memory default only protects a single process.
 """
 from __future__ import annotations
 
@@ -15,99 +21,91 @@ import secrets
 import time
 from typing import Optional, Protocol
 
+from ubag._keys import agent_id, agent_verify
+
 
 class UBAGNonceStore(Protocol):
-    """Minimal interface for nonce persistence. Implement to prevent replay attacks."""
-    def exists(self, nonce_id: str) -> bool: ...
-    def mark_used(self, nonce_id: str) -> None: ...
+    def exists(self, nonce: str) -> bool: ...
+    def mark_used(self, nonce: str) -> None: ...
 
 
-# In-memory store — sufficient for single-process deployments
 class _MemoryNonceStore:
     def __init__(self) -> None:
         self._used: set[str] = set()
 
-    def exists(self, nonce_id: str) -> bool:
-        return nonce_id in self._used
+    def exists(self, nonce: str) -> bool:
+        return nonce in self._used
 
-    def mark_used(self, nonce_id: str) -> None:
-        self._used.add(nonce_id)
+    def mark_used(self, nonce: str) -> None:
+        self._used.add(nonce)
 
 
 _default_store = _MemoryNonceStore()
 
 
-def generate_challenge(secret_key: str, client_ip: str = "", ttl: int = 30) -> dict:
-    """
-    Generate a nonce challenge payload sent in the 429 response.
+def _stamp(server_secret: str, nonce: str, ts: int) -> str:
+    return hmac.new(
+        server_secret.encode(), f"{nonce}:{ts}".encode(), hashlib.sha256
+    ).hexdigest()
+
+
+def generate_challenge(server_secret: str, ttl: int = 120) -> dict:
+    """Generate a nonce challenge for an unknown agent (sent in the 429 body).
 
     The agent must:
-      1. Read `nonce_id`
-      2. Compute HMAC-SHA256(secret_key, nonce_id) → hex digest
-      3. POST to /ubag/verify with the signed value and delta_ms
+      1. read `nonce`
+      2. sign the nonce bytes with its Ed25519 private key
+      3. POST {nonce, timestamp, stamp, agent_public, signature} to /ubag/verify
     """
-    nonce_id = secrets.token_hex(24)
-    ts       = int(time.time())
-    mac      = hmac.new(secret_key.encode(), f"{nonce_id}:{ts}".encode(), hashlib.sha256).hexdigest()
+    nonce = secrets.token_urlsafe(32)
+    ts = int(time.time())
     return {
-        "nonce_id":    nonce_id,
-        "timestamp":   ts,
-        "ttl":         ttl,
-        "signing_algo": "HMAC-SHA256",
-        "mac":         mac,
+        "nonce": nonce,
+        "timestamp": ts,
+        "ttl": ttl,
+        "algo": "Ed25519",
+        "stamp": _stamp(server_secret, nonce, ts),
         "instructions": (
-            "Sign nonce_id with HMAC-SHA256(your_secret, nonce_id) "
-            "and POST to /ubag/verify with signed_nonce and delta_ms"
+            "Sign the `nonce` bytes with your Ed25519 private key and POST "
+            "{nonce, timestamp, stamp, agent_public, signature} to /ubag/verify."
         ),
     }
 
 
 def verify_challenge(
-    secret_key: str,
-    nonce_id: str,
+    server_secret: str,
+    nonce: str,
     timestamp: int,
-    mac: str,
-    signed_nonce: str,
-    delta_ms: float,
-    ttl: int = 30,
-    cadence_min_ms: float = 5,
-    cadence_max_ms: float = 2000,
+    stamp: str,
+    agent_public: str,
+    signature: str,
+    ttl: int = 120,
     store: Optional[UBAGNonceStore] = None,
-) -> tuple[bool, str]:
-    """
-    Verify a challenge response. Returns (ok, reason).
+) -> tuple[bool, str, Optional[str]]:
+    """Verify a challenge response. Returns (ok, reason, agent_id).
 
-    Checks:
-      1. Replay — nonce not already used
-      2. MAC    — nonce payload integrity
-      3. Expiry — nonce within TTL
-      4. Cadence — delta_ms in [cadence_min_ms, cadence_max_ms]
-      5. Signature — agent signed nonce_id correctly
+    1. Replay   — nonce not already used
+    2. Stamp    — the server issued this exact (nonce, ts), untampered
+    3. Expiry   — within TTL
+    4. Identity — agent's signature over the nonce verifies under agent_public
     """
     nonce_store = store or _default_store
 
-    if nonce_store.exists(nonce_id):
-        return False, "nonce_already_used"
+    if not nonce or not agent_public or not signature:
+        return False, "missing_fields", None
 
-    expected_mac = hmac.new(
-        secret_key.encode(), f"{nonce_id}:{timestamp}".encode(), hashlib.sha256
-    ).hexdigest()
-    if not hmac.compare_digest(expected_mac, mac):
-        return False, "invalid_mac"
+    if nonce_store.exists(nonce):
+        return False, "nonce_already_used", None
+
+    if not hmac.compare_digest(_stamp(server_secret, nonce, timestamp), stamp):
+        return False, "invalid_stamp", None
 
     if int(time.time()) - timestamp > ttl:
-        return False, "nonce_expired"
+        return False, "nonce_expired", None
 
-    if delta_ms < cadence_min_ms:
-        return False, "cadence_too_fast"
-    if delta_ms > cadence_max_ms:
-        return False, "human_emulated_delay"
+    # The identity proof: only the holder of the matching private key can produce this.
+    if not agent_verify(agent_public, nonce.encode(), signature):
+        return False, "bad_signature", None
 
-    expected_sig = hmac.new(
-        secret_key.encode(), nonce_id.encode(), hashlib.sha256
-    ).hexdigest()
-    if not hmac.compare_digest(expected_sig, signed_nonce):
-        return False, "bad_signature"
-
-    nonce_store.mark_used(nonce_id)
-    return True, "authorized"
+    nonce_store.mark_used(nonce)
+    return True, "authorized", agent_id(agent_public)

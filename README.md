@@ -40,11 +40,23 @@ Incoming request
         │                                   Origin server, untouched.
         │
         └── Unknown agent?  ─────────────► Branch C: Sandbox + challenge
-                                            Cryptographic nonce.
+                                            Sign a nonce with your key (Ed25519).
                                             Prove identity → get credentialed.
 ```
 
 **Branch B is the key insight.** Instead of an agent crawling 50 pages to understand a business, UBAG serves one structured JSON-LD response with everything — products, prices, policies, contacts. One request. No parsing. No hallucination from bad HTML.
+
+---
+
+## Security Model
+
+UBAG is **asymmetric — there are no shared secrets:**
+
+- **Agent identity = an Ed25519 keypair.** An agent's identity is the SHA-256 thumbprint of its public key (`ubag:…`). To get in, the agent signs the site's nonce with its *private* key; the site verifies with the *public* key. Only the holder of the key can pass — knowing a shared secret never establishes *who* an agent is.
+- **Credentials = ES256 JWTs** signed by an issuer's EC P-256 private key and verifiable by any site with the issuer's *public* key (publishable as JWKS at `/.well-known/jwks.json`). No site needs a secret to validate a credential — the same model as OAuth / OIDC, which is what lets one credential work across independent sites.
+- **Proof-of-possession ready.** Each credential binds to the agent's key via the `cnf` claim, so a verifier can require the bearer to prove it still holds the matching private key.
+
+The Python and Node SDKs share identical wire formats (raw Ed25519 + ES256), so a signature or credential produced by one verifies in the other.
 
 ---
 
@@ -56,10 +68,18 @@ pip install ubag
 
 ```python
 from fastapi import FastAPI
-from ubag import UBAGMiddleware
+from ubag import UBAGMiddleware, generate_issuer_keypair
+
+# Your site is its own credential issuer. Generate once and persist these
+# (or run verify-only by passing issuer_public_key alone).
+ISSUER_PRIVATE, ISSUER_PUBLIC = generate_issuer_keypair()   # EC P-256 (ES256)
 
 app = FastAPI()
-app.add_middleware(UBAGMiddleware, origin="https://yoursite.com")
+app.add_middleware(
+    UBAGMiddleware,
+    origin="https://yoursite.com",
+    issuer_key=ISSUER_PRIVATE,   # mints + verifies agent credentials
+)
 ```
 
 That's it. Your site now:
@@ -79,15 +99,17 @@ If you're building an MCP agent that visits websites, get a UBAG credential:
 ```python
 from ubag import AgentCredential
 
-# Register your agent once
-cred = AgentCredential.register(
-    agent_name="MyResearchAgent",
-    owner="your@email.com",
-    allowed_paths=["/*"]
-)
+# Your agent's identity IS its Ed25519 keypair. Generate once; persist agent.export().
+agent = AgentCredential.generate(owner="you@email.com")
 
-# Credential travels with every request
-headers = cred.headers()
+# When a UBAG site challenges you (HTTP 429), sign the nonce and post it back:
+#   challenge = resp.json()["ubag_challenge"]
+#   solution  = agent.solve_challenge(challenge)     # signs the nonce with your private key
+#   r = httpx.post(f"{site}/ubag/verify", json=solution)
+#   agent.set_credential(r.json()["credential"])
+
+# Once credentialed, it travels with every request:
+headers = agent.headers()
 # {"X-UBAG-Credential": "eyJ..."}
 ```
 

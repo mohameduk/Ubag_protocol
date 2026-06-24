@@ -8,3 +8,9 @@ build/
 venv/
 .pytest_cache/
 *.egg
+
+# Node
+node_modules/
+npm-debug.log*
+.npm/
+coverage/

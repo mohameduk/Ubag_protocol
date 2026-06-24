@@ -1,112 +1,80 @@
-"""Tests for Branch C sandbox challenge."""
-import hashlib
-import hmac
+"""Tests for Branch C agent identity challenge (asymmetric Ed25519)."""
 import time
 
-import pytest
-from ubag._challenge import generate_challenge, verify_challenge, _MemoryNonceStore
+from ubag._challenge import generate_challenge, verify_challenge, _MemoryNonceStore, _stamp
+from ubag._keys import generate_agent_keypair, agent_sign, agent_id
 
-SECRET = "test-secret-32-chars-minimum-ok!"
+SERVER_SECRET = "server-stamp-secret"
 
 
-def _solve(challenge: dict) -> str:
-    """Correctly sign a challenge as a legitimate agent would."""
-    return hmac.new(
-        SECRET.encode(),
-        challenge["nonce_id"].encode(),
-        hashlib.sha256,
-    ).hexdigest()
+def _solve(challenge: dict, priv: str) -> str:
+    return agent_sign(priv, challenge["nonce"].encode())
 
 
 def test_valid_challenge_accepted():
-    store     = _MemoryNonceStore()
-    challenge = generate_challenge(SECRET)
-    signed    = _solve(challenge)
-
-    ok, reason = verify_challenge(
-        secret_key=SECRET,
-        nonce_id=challenge["nonce_id"],
-        timestamp=challenge["timestamp"],
-        mac=challenge["mac"],
-        signed_nonce=signed,
-        delta_ms=100,
-        store=store,
+    store = _MemoryNonceStore()
+    priv, pub = generate_agent_keypair()
+    ch = generate_challenge(SERVER_SECRET)
+    ok, reason, aid = verify_challenge(
+        SERVER_SECRET, ch["nonce"], ch["timestamp"], ch["stamp"], pub, _solve(ch, priv), store=store
     )
     assert ok is True
     assert reason == "authorized"
+    assert aid == agent_id(pub)
 
 
 def test_replay_rejected():
-    store     = _MemoryNonceStore()
-    challenge = generate_challenge(SECRET)
-    signed    = _solve(challenge)
-
-    verify_challenge(SECRET, challenge["nonce_id"], challenge["timestamp"],
-                     challenge["mac"], signed, 100, store=store)
-
-    ok, reason = verify_challenge(SECRET, challenge["nonce_id"], challenge["timestamp"],
-                                  challenge["mac"], signed, 100, store=store)
+    store = _MemoryNonceStore()
+    priv, pub = generate_agent_keypair()
+    ch = generate_challenge(SERVER_SECRET)
+    sig = _solve(ch, priv)
+    verify_challenge(SERVER_SECRET, ch["nonce"], ch["timestamp"], ch["stamp"], pub, sig, store=store)
+    ok, reason, _ = verify_challenge(
+        SERVER_SECRET, ch["nonce"], ch["timestamp"], ch["stamp"], pub, sig, store=store
+    )
     assert ok is False
     assert reason == "nonce_already_used"
 
 
-def test_wrong_signature_rejected():
-    store     = _MemoryNonceStore()
-    challenge = generate_challenge(SECRET)
-
-    ok, reason = verify_challenge(
-        secret_key=SECRET,
-        nonce_id=challenge["nonce_id"],
-        timestamp=challenge["timestamp"],
-        mac=challenge["mac"],
-        signed_nonce="wrong",
-        delta_ms=100,
-        store=store,
+def test_wrong_key_rejected():
+    """A signature from a DIFFERENT private key must not validate against pub — the
+    whole point of asymmetric identity."""
+    store = _MemoryNonceStore()
+    _, pub = generate_agent_keypair()
+    other_priv, _ = generate_agent_keypair()
+    ch = generate_challenge(SERVER_SECRET)
+    sig = agent_sign(other_priv, ch["nonce"].encode())
+    ok, reason, _ = verify_challenge(
+        SERVER_SECRET, ch["nonce"], ch["timestamp"], ch["stamp"], pub, sig, store=store
     )
     assert ok is False
     assert reason == "bad_signature"
 
 
-def test_cadence_too_fast_rejected():
-    store     = _MemoryNonceStore()
-    challenge = generate_challenge(SECRET)
-    signed    = _solve(challenge)
-
-    ok, reason = verify_challenge(SECRET, challenge["nonce_id"], challenge["timestamp"],
-                                  challenge["mac"], signed, delta_ms=1, store=store)
+def test_tampered_stamp_rejected():
+    store = _MemoryNonceStore()
+    priv, pub = generate_agent_keypair()
+    ch = generate_challenge(SERVER_SECRET)
+    ok, reason, _ = verify_challenge(
+        SERVER_SECRET, ch["nonce"], ch["timestamp"], "deadbeef", pub, _solve(ch, priv), store=store
+    )
     assert ok is False
-    assert reason == "cadence_too_fast"
-
-
-def test_human_emulated_delay_rejected():
-    store     = _MemoryNonceStore()
-    challenge = generate_challenge(SECRET)
-    signed    = _solve(challenge)
-
-    ok, reason = verify_challenge(SECRET, challenge["nonce_id"], challenge["timestamp"],
-                                  challenge["mac"], signed, delta_ms=9999, store=store)
-    assert ok is False
-    assert reason == "human_emulated_delay"
+    assert reason == "invalid_stamp"
 
 
 def test_expired_nonce_rejected():
-    import time
-    store     = _MemoryNonceStore()
-    # Generate challenge with a past timestamp by backdating manually
-    nonce_id  = "deadbeef" * 6
-    timestamp = int(time.time()) - 9999
-    mac       = hmac.new(SECRET.encode(), f"{nonce_id}:{timestamp}".encode(), hashlib.sha256).hexdigest()
-    signed    = hmac.new(SECRET.encode(), nonce_id.encode(), hashlib.sha256).hexdigest()
-
-    ok, reason = verify_challenge(
-        secret_key=SECRET,
-        nonce_id=nonce_id,
-        timestamp=timestamp,
-        mac=mac,
-        signed_nonce=signed,
-        delta_ms=100,
-        ttl=1,
-        store=store,
-    )
+    store = _MemoryNonceStore()
+    priv, pub = generate_agent_keypair()
+    nonce = "x" * 43
+    ts = int(time.time()) - 9999
+    stamp = _stamp(SERVER_SECRET, nonce, ts)
+    sig = agent_sign(priv, nonce.encode())
+    ok, reason, _ = verify_challenge(SERVER_SECRET, nonce, ts, stamp, pub, sig, ttl=1, store=store)
     assert ok is False
     assert reason == "nonce_expired"
+
+
+def test_missing_fields_rejected():
+    ok, reason, _ = verify_challenge(SERVER_SECRET, "", 0, "", "", "", store=_MemoryNonceStore())
+    assert ok is False
+    assert reason == "missing_fields"
