@@ -20,8 +20,8 @@ loop. This is that layer.
 > adopt (`ubag.json` discovery + a sign-the-nonce challenge + `X-UBAG-Credential`),
 > not a product you have to buy into.
 
-> **Status:** early but real. Two working SDKs (Python + Node) with a shared,
-> cross-verifiable wire format. Not yet published to PyPI/npm — install from source.
+> **Status:** early but real. Two published SDKs — `pip install ubag` (Python) and
+> `npm install ubag-web` (Node) — sharing a cross-verifiable wire format.
 > See [Project status](#project-status) for exactly what works today vs. what's planned.
 
 ---
@@ -83,18 +83,19 @@ The Python and Node SDKs share identical wire formats (raw Ed25519 + ES256), so 
 
 ## Install
 
-Not yet on PyPI / npm. Install from this repo:
-
 ```bash
 # Python (FastAPI / Starlette)
-git clone https://github.com/mohameduk/Ubag_protocol
-cd Ubag_protocol/ubag-python
-pip install -e ".[fastapi]"
+pip install "ubag[fastapi]"
 
 # Node (Express)
-cd ../ubag-node
-npm install
+npm install ubag-web
 ```
+
+> The npm package is **`ubag-web`** (npm reserves the bare `ubag`); the Python
+> package is **`ubag`**. Same protocol, identical wire format.
+
+Or from source: `git clone` the repo, then `pip install -e ".[fastapi]"` in
+`ubag-python/` and `npm install` in `ubag-node/`.
 
 ---
 
@@ -133,7 +134,7 @@ Your site now:
 
 ```js
 const express = require('express');
-const { ubag, generateIssuerKeypair } = require('ubag');
+const { ubag, generateIssuerKeypair } = require('ubag-web');
 
 const { privateKey: ISSUER_PRIVATE } = generateIssuerKeypair();  // EC P-256 (ES256)
 
@@ -293,9 +294,9 @@ cd ubag-node && npm install && npm test
 - [x] `ubag.json` discovery — served on every UBAG site (alias: `/agents.json`)
 - [x] Audit hook — `audit_fn` callback on every request
 - [x] Python SDK (FastAPI/Starlette) + Node SDK (Express), cross-SDK verified
+- [x] Published — `pip install ubag` (PyPI) and `npm install ubag-web` (npm)
 
 **Planned / not yet built**
-- [ ] Publish to PyPI (`pip install ubag`) and npm (`npm install ubag`)
 - [ ] Django / Flask / Next.js middleware adapters
 - [ ] Hosted credential registry / issuer at `ubagprotocol.com/credential`
 - [ ] WordPress plugin

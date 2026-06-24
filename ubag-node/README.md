@@ -15,14 +15,17 @@ secrets.
 ## Install
 
 ```bash
-npm install ubag
+npm install ubag-web
 ```
+
+> The npm package is **`ubag-web`** (npm reserves the bare `ubag`); the Python
+> package is **`ubag`** (`pip install ubag`). Same protocol, identical wire format.
 
 ## Quick start
 
 ```js
 const express = require('express');
-const { ubag, generateIssuerKeypair } = require('ubag');
+const { ubag, generateIssuerKeypair } = require('ubag-web');
 
 const { privateKey: ISSUER_PRIVATE } = generateIssuerKeypair();  // EC P-256 (ES256)
 
