@@ -9,7 +9,7 @@ from __future__ import annotations
 
 def build_agents_json(
     host: str,
-    credential_endpoint: str = "https://ubagprotocol.com/credential",
+    credential_endpoint: str = "",
     contact: str = "",
     custom_fields: dict | None = None,
 ) -> dict:
@@ -18,7 +18,13 @@ def build_agents_json(
 
     MCP agents should fetch this before making requests to understand
     what credentials are required and what data is available.
+
+    `credential_endpoint` is where an agent obtains a credential. A self-issuing
+    site (one configured with an issuer key) mints credentials at its own
+    `/ubag/verify`, so when no endpoint is given we advertise that — no hosted
+    central registry is required.
     """
+    credential_endpoint = credential_endpoint or f"https://{host}/ubag/verify"
     doc = {
         "ubag_version": "1.0",
         "host": host,
@@ -42,6 +48,7 @@ def build_agents_json(
         "discovery": {
             "agents_json": f"https://{host}/agents.json",
             "verify_endpoint": f"https://{host}/ubag/verify",
+            "jwks_endpoint": f"https://{host}/.well-known/jwks.json",
         },
     }
     if contact:

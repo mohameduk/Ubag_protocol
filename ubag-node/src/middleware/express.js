@@ -5,7 +5,7 @@ const { fetch } = require('undici');
 const { Branch, resolveBranch } = require('../routing');
 const { CREDENTIAL_HEADER, issueCredential, validateCredential } = require('../credential');
 const { generateChallenge, verifyChallenge } = require('../challenge');
-const { issuerPublicFromPrivate } = require('../keys');
+const { issuerPublicFromPrivate, buildJwks } = require('../keys');
 const { buildAgentsJson } = require('../agentsJson');
 
 function ubag(options = {}) {
@@ -15,7 +15,7 @@ function ubag(options = {}) {
     issuerPublicKey = process.env.UBAG_ISSUER_PUBLIC || '', // verify-only sites
     serverSecret: serverSecretOpt = process.env.UBAG_SERVER_SECRET || '',
     siteMeta = {},
-    credentialEndpoint = 'https://ubagprotocol.com/credential',
+    credentialEndpoint = '',
     auditFn = null,
     onVerified = null,
   } = options;
@@ -35,6 +35,14 @@ function ubag(options = {}) {
     if (path === '/agents.json') {
       const host = (req.headers.host || '').split(':')[0];
       return res.json(buildAgentsJson(host, { credentialEndpoint }));
+    }
+
+    if (path === '/.well-known/jwks.json') {
+      // Issuer public key, so any site can verify this issuer's credentials
+      // without holding a secret (OAuth/OIDC model).
+      if (!issuerPublic) return res.status(404).json({ error: 'no_issuer_key' });
+      res.setHeader('Cache-Control', 'public, max-age=3600');
+      return res.json(buildJwks(issuerPublic));
     }
 
     if (path === '/ubag/verify') {

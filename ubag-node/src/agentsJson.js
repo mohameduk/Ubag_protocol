@@ -1,6 +1,9 @@
 'use strict';
 
-function buildAgentsJson(host, { credentialEndpoint = 'https://ubagprotocol.com/credential', contact = '' } = {}) {
+function buildAgentsJson(host, { credentialEndpoint = '', contact = '' } = {}) {
+  // A self-issuing site mints credentials at its own /ubag/verify, so when no
+  // endpoint is given we advertise that — no hosted central registry required.
+  credentialEndpoint = credentialEndpoint || `https://${host}/ubag/verify`;
   const doc = {
     ubag_version: '1.0',
     host,
@@ -24,6 +27,7 @@ function buildAgentsJson(host, { credentialEndpoint = 'https://ubagprotocol.com/
     discovery: {
       agents_json:      `https://${host}/agents.json`,
       verify_endpoint:  `https://${host}/ubag/verify`,
+      jwks_endpoint:    `https://${host}/.well-known/jwks.json`,
     },
   };
   if (contact) doc.contact = contact;

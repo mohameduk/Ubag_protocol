@@ -3,13 +3,15 @@ FastAPI / Starlette ASGI middleware.
 
 Usage:
     from fastapi import FastAPI
-    from ubag import UBAGMiddleware
+    from ubag import UBAGMiddleware, generate_issuer_keypair
+
+    issuer_private, _ = generate_issuer_keypair()   # EC P-256 (ES256)
 
     app = FastAPI()
     app.add_middleware(
         UBAGMiddleware,
         origin="https://yoursite.com",
-        secret_key="your-32-char-secret",
+        issuer_key=issuer_private,                  # mints + verifies credentials
         site_meta={
             "name": "My Store",
             "type": "Store",
@@ -32,7 +34,7 @@ from starlette.responses import JSONResponse, Response
 from ubag._agents_json import build_agents_json
 from ubag._challenge import generate_challenge, verify_challenge
 from ubag._credential import CREDENTIAL_HEADER, issue_credential, validate_credential
-from ubag._keys import issuer_public_from_private
+from ubag._keys import build_jwks, issuer_public_from_private
 from ubag._routing import RoutingBranch, resolve_branch
 from ubag._sux import build_jsonld_response
 
@@ -62,7 +64,7 @@ class UBAGMiddleware(BaseHTTPMiddleware):
         issuer_public_key: str = "",
         server_secret: str = "",
         site_meta: dict[str, Any] | None = None,
-        credential_endpoint: str = "https://ubagprotocol.com/credential",
+        credential_endpoint: str = "",
         audit_fn: Optional[Callable] = None,
         on_verified: Optional[Callable] = None,
     ) -> None:
@@ -98,6 +100,8 @@ class UBAGMiddleware(BaseHTTPMiddleware):
         # UBAG system paths — handled here, never forwarded
         if path == "/agents.json":
             return self._agents_json_response(request)
+        if path == "/.well-known/jwks.json":
+            return self._jwks_response()
         if path == "/ubag/verify":
             return await self._handle_verify(request)
 
@@ -274,6 +278,19 @@ class UBAGMiddleware(BaseHTTPMiddleware):
             credential_endpoint=self.credential_endpoint,
         )
         return JSONResponse(content=doc, headers={"X-UBAG-Branch": "META"})
+
+    # ------------------------------------------------------------------
+    # /.well-known/jwks.json — issuer public key, so any site can verify
+    # this issuer's credentials without holding a secret (OAuth/OIDC model)
+    # ------------------------------------------------------------------
+
+    def _jwks_response(self) -> JSONResponse:
+        if not self.issuer_public:
+            return JSONResponse(status_code=404, content={"error": "no_issuer_key"})
+        return JSONResponse(
+            content=build_jwks(self.issuer_public),
+            headers={"X-UBAG-Branch": "META", "Cache-Control": "public, max-age=3600"},
+        )
 
     # ------------------------------------------------------------------
     # Shared HTTP client for Branch A

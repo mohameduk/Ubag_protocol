@@ -1,6 +1,10 @@
 # UBAG Web Layer
 ### Universal Behavioral Authorization Gateway — Web Layer
 
+[![CI](https://github.com/mohameduk/Ubag_protocol/actions/workflows/ci.yml/badge.svg)](https://github.com/mohameduk/Ubag_protocol/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+[![status: experimental](https://img.shields.io/badge/status-experimental-orange.svg)](#project-status)
+
 **Agent identity and routing at the web edge. The open reference implementation.**
 
 When an autonomous agent visits a website, UBAG verifies *who it is* and routes
@@ -69,7 +73,7 @@ Incoming request
 UBAG is **asymmetric — there are no shared secrets in the identity path:**
 
 - **Agent identity = an Ed25519 keypair.** An agent's identity is the SHA-256 thumbprint of its public key (`ubag:…`). To get in, the agent signs the site's nonce with its *private* key; the site verifies with the *public* key. Only the holder of the key can pass — knowing a shared secret never establishes *who* an agent is.
-- **Credentials = ES256 JWTs** signed by an issuer's EC P-256 private key and verifiable by any site with the issuer's *public* key (publishable as JWKS). No site needs a secret to validate a credential — the same model as OAuth / OIDC, which is what lets one credential work across independent sites.
+- **Credentials = ES256 JWTs** signed by an issuer's EC P-256 private key and verifiable by any site with the issuer's *public* key — auto-served as JWKS at `/.well-known/jwks.json`. No site needs a secret to validate a credential — the same model as OAuth / OIDC, which is what lets one credential work across independent sites.
 - **Proof-of-possession ready.** Each credential binds to the agent's key via the `cnf` claim, so a verifier can require the bearer to prove it still holds the matching private key.
 - **One server-side HMAC**, used only so the site can confirm it issued a given nonce **without storing state** (the server signing to *itself*). It is *not* part of the identity proof.
 
@@ -140,6 +144,23 @@ app.use(ubag({
   serverSecret: 'a-random-32+char-string-for-nonce-stamping',
   siteMeta: { name: 'My Store', type: 'Store', description: 'We sell widgets' },
 }));
+```
+
+---
+
+## See it work (60 seconds)
+
+Runnable end-to-end demos spin up a UBAG site in-process and walk one agent
+through the whole handshake — *blocked → challenged → signs the nonce →
+credentialed → served JSON-LD* — then print the JWKS another site would use to
+verify the credential:
+
+```bash
+# Python
+cd ubag-python && pip install -e ".[fastapi]" && python ../examples/demo.py
+
+# Node
+npm install --prefix ubag-node && node examples/demo.js
 ```
 
 ---
