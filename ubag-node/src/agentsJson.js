@@ -16,7 +16,7 @@ function buildAgentsJson(host, { credentialEndpoint = 'https://ubagprotocol.com/
         requires: 'None',
       },
       'C-SANDBOX': {
-        description: 'Unknown agents — cryptographic HMAC challenge',
+        description: 'Unknown agents — Ed25519 nonce-signature challenge',
         requires: 'None — solve challenge to get credentialed',
         challenge_endpoint: '/ubag/verify',
       },
