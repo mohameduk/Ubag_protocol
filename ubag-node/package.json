@@ -3,12 +3,13 @@
   "version": "0.2.0",
   "description": "Agent identity and routing middleware for MCP-compatible agents",
   "main": "src/index.js",
+  "files": ["src", "README.md", "LICENSE"],
   "keywords": ["mcp", "agents", "ai", "middleware", "routing", "bot-detection"],
   "author": "Mohamed Ben Hadj Hmida",
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "https://github.com/mohameduk/Ubag_protocol"
+    "url": "git+https://github.com/mohameduk/Ubag_protocol.git"
   },
   "homepage": "https://ubagprotocol.com",
   "dependencies": {
