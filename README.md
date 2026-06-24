@@ -17,7 +17,7 @@ loop. This is that layer.
 > is allowed to *do* against credentialed systems and MCP tools; this **Web Layer**
 > governs how an agent *reaches* a website. This repo is the open, MIT-licensed
 > reference implementation of the Web Layer — and of an open mechanism any site can
-> adopt (`agents.json` discovery + a sign-the-nonce challenge + `X-UBAG-Credential`),
+> adopt (`ubag.json` discovery + a sign-the-nonce challenge + `X-UBAG-Credential`),
 > not a product you have to buy into.
 
 > **Status:** early but real. Two working SDKs (Python + Node) with a shared,
@@ -126,7 +126,7 @@ Your site now:
 - ✅ Serves clean JSON-LD to credentialed MCP agents (Branch B)
 - ✅ Proxies humans transparently to your origin (Branch A)
 - ✅ Sandboxes unknown agents with an Ed25519 nonce challenge (Branch C)
-- ✅ Serves `yoursite.com/agents.json` for agent discovery
+- ✅ Serves `yoursite.com/.well-known/ubag.json` for agent discovery
 - ✅ Calls your optional `audit_fn(branch, request, response)` on every visit
 
 ## Quick Start — Node (Express)
@@ -190,15 +190,19 @@ UBAG-enabled sites recognize your agent and serve structured data instead of HTM
 
 ---
 
-## agents.json
+## Discovery: `/.well-known/ubag.json`
 
-Every UBAG-enabled site serves `/agents.json` (built by `build_agents_json`):
+Every UBAG-enabled site serves a discovery document at `/.well-known/ubag.json`
+(with `/agents.json` kept as a legacy alias). It's deliberately **not** named
+`agents.json` — that filename is already claimed by unrelated specs (Wildcard's
+OpenAPI-style `agents.json`, Google/Microsoft/HF's ARD, etc.); `ubag.json` keeps
+UBAG's identity/routing document collision-free and unambiguous.
 
 ```json
 {
   "ubag_version": "1.0",
   "host": "yoursite.com",
-  "credential_endpoint": "https://ubagprotocol.com/credential",
+  "credential_endpoint": "https://yoursite.com/ubag/verify",
   "branches": {
     "B-AGENT":   { "description": "Authorized MCP agents — clean JSON-LD",
                    "requires": "X-UBAG-Credential header with valid JWT",
@@ -210,8 +214,9 @@ Every UBAG-enabled site serves `/agents.json` (built by `build_agents_json`):
                    "challenge_endpoint": "/ubag/verify" }
   },
   "discovery": {
-    "agents_json": "https://yoursite.com/agents.json",
-    "verify_endpoint": "https://yoursite.com/ubag/verify"
+    "ubag_json": "https://yoursite.com/.well-known/ubag.json",
+    "verify_endpoint": "https://yoursite.com/ubag/verify",
+    "jwks_endpoint": "https://yoursite.com/.well-known/jwks.json"
   }
 }
 ```
@@ -263,7 +268,7 @@ ubag-node/      Node middleware — Express today (v0.2.0)
 ```
 
 Both packages implement the full protocol (routing, credentials, challenge, keys,
-agents.json) and share a cross-verifiable wire format.
+ubag.json) and share a cross-verifiable wire format.
 
 ---
 
@@ -286,7 +291,7 @@ cd ubag-node && npm install && npm test
 - [x] Branch B — agent JSON-LD structured data
 - [x] Branch C — sandbox + Ed25519 nonce challenge
 - [x] Asymmetric crypto — Ed25519 agent identity + ES256/JWKS credentials, no shared secrets
-- [x] `agents.json` — served on every UBAG site
+- [x] `ubag.json` discovery — served on every UBAG site (alias: `/agents.json`)
 - [x] Audit hook — `audit_fn` callback on every request
 - [x] Python SDK (FastAPI/Starlette) + Node SDK (Express), cross-SDK verified
 
@@ -303,7 +308,7 @@ cd ubag-node && npm install && npm test
 
 ## Contributing
 
-PRs welcome. The goal isn't to make everyone adopt "UBAG" — it's to make the *mechanism* easy to adopt: `agents.json` discovery, a sign-the-nonce challenge, and a portable `X-UBAG-Credential` that any site can verify without a shared secret. Open, verifiable, and not owned by any cloud provider. UBAG is just the reference implementation.
+PRs welcome. The goal isn't to make everyone adopt "UBAG" — it's to make the *mechanism* easy to adopt: `ubag.json` discovery, a sign-the-nonce challenge, and a portable `X-UBAG-Credential` that any site can verify without a shared secret. Open, verifiable, and not owned by any cloud provider. UBAG is just the reference implementation.
 
 ---
 

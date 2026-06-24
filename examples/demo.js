@@ -39,8 +39,8 @@ const step = (t) => console.log('\n' + '='.repeat(66) + '\n' + t + '\n' + '='.re
   const base = `http://127.0.0.1:${server.address().port}`;
   try {
     // 0 — discovery
-    step('0. Agent discovers the site via /agents.json');
-    console.log(await (await fetch(`${base}/agents.json`)).json());
+    step('0. Agent discovers the site via /.well-known/ubag.json');
+    console.log(await (await fetch(`${base}/.well-known/ubag.json`)).json());
 
     // 1 — cold request is challenged
     step('1. Unknown agent requests /  ->  Branch C (challenge)');

@@ -17,7 +17,14 @@ function makeApp() {
 }
 const app = makeApp();
 
-test('GET /agents.json returns discovery doc', async () => {
+test('GET /.well-known/ubag.json returns discovery doc', async () => {
+  const res = await request(app).get('/.well-known/ubag.json');
+  expect(res.status).toBe(200);
+  expect(res.body.ubag_version).toBe('1.0');
+  expect(res.body.discovery.ubag_json).toMatch(/\/\.well-known\/ubag\.json$/);
+});
+
+test('GET /agents.json still served (legacy alias)', async () => {
   const res = await request(app).get('/agents.json');
   expect(res.status).toBe(200);
   expect(res.body.ubag_version).toBe('1.0');

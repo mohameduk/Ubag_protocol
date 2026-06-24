@@ -25,7 +25,7 @@ function buildAgentsJson(host, { credentialEndpoint = '', contact = '' } = {}) {
       },
     },
     discovery: {
-      agents_json:      `https://${host}/agents.json`,
+      ubag_json:        `https://${host}/.well-known/ubag.json`,
       verify_endpoint:  `https://${host}/ubag/verify`,
       jwks_endpoint:    `https://${host}/.well-known/jwks.json`,
     },

@@ -32,7 +32,7 @@ function ubag(options = {}) {
   return async function ubagMiddleware(req, res, next) {
     const path = req.path || req.url;
 
-    if (path === '/agents.json') {
+    if (path === '/.well-known/ubag.json' || path === '/agents.json') { // /agents.json = legacy alias
       const host = (req.headers.host || '').split(':')[0];
       return res.json(buildAgentsJson(host, { credentialEndpoint }));
     }

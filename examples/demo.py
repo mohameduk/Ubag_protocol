@@ -46,8 +46,8 @@ def step(title: str) -> None:
 
 
 # 0 — discovery
-step("0. Agent discovers the site via /agents.json")
-print(client.get("/agents.json").json())
+step("0. Agent discovers the site via /.well-known/ubag.json")
+print(client.get("/.well-known/ubag.json").json())
 
 # 1 — cold request is challenged
 step("1. Unknown agent requests /  ->  Branch C (challenge)")

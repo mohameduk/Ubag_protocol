@@ -28,7 +28,14 @@ def make_app(**kwargs) -> FastAPI:
 client = TestClient(make_app(), raise_server_exceptions=True)
 
 
-def test_agents_json_served():
+def test_ubag_json_served():
+    r = client.get("/.well-known/ubag.json")
+    assert r.status_code == 200
+    assert r.json()["ubag_version"] == "1.0"
+    assert r.json()["discovery"]["ubag_json"].endswith("/.well-known/ubag.json")
+
+
+def test_agents_json_legacy_alias_still_served():
     r = client.get("/agents.json")
     assert r.status_code == 200
     assert r.json()["ubag_version"] == "1.0"

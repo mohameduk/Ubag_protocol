@@ -1,8 +1,10 @@
 """
-agents.json — machine-readable agent discovery file.
+ubag.json — machine-readable agent discovery file.
 
-Served automatically at /agents.json on every UBAG-enabled site.
-Tells MCP agents how to authenticate and what they can access.
+Served automatically at /.well-known/ubag.json on every UBAG-enabled site
+(with /agents.json kept as a legacy alias). Tells MCP agents how to authenticate
+and what they can access. Deliberately *not* named agents.json — that filename is
+already used by unrelated specs (Wildcard, ARD, etc.); ubag.json avoids the clash.
 """
 from __future__ import annotations
 
@@ -14,7 +16,7 @@ def build_agents_json(
     custom_fields: dict | None = None,
 ) -> dict:
     """
-    Build the agents.json discovery document for a given host.
+    Build the ubag.json discovery document for a given host.
 
     MCP agents should fetch this before making requests to understand
     what credentials are required and what data is available.
@@ -46,7 +48,7 @@ def build_agents_json(
             },
         },
         "discovery": {
-            "agents_json": f"https://{host}/agents.json",
+            "ubag_json": f"https://{host}/.well-known/ubag.json",
             "verify_endpoint": f"https://{host}/ubag/verify",
             "jwks_endpoint": f"https://{host}/.well-known/jwks.json",
         },

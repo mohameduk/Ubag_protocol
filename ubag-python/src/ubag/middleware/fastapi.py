@@ -98,8 +98,8 @@ class UBAGMiddleware(BaseHTTPMiddleware):
         path = request.url.path
 
         # UBAG system paths — handled here, never forwarded
-        if path == "/agents.json":
-            return self._agents_json_response(request)
+        if path in ("/.well-known/ubag.json", "/agents.json"):  # /agents.json = legacy alias
+            return self._ubag_json_response(request)
         if path == "/.well-known/jwks.json":
             return self._jwks_response()
         if path == "/ubag/verify":
@@ -268,10 +268,10 @@ class UBAGMiddleware(BaseHTTPMiddleware):
         )
 
     # ------------------------------------------------------------------
-    # /agents.json
+    # /.well-known/ubag.json  (alias: /agents.json) — discovery document
     # ------------------------------------------------------------------
 
-    def _agents_json_response(self, request: Request) -> JSONResponse:
+    def _ubag_json_response(self, request: Request) -> JSONResponse:
         host = request.headers.get("host", "").split(":")[0]
         doc  = build_agents_json(
             host=host,

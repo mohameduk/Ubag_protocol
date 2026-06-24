@@ -3,7 +3,7 @@
 ## v0.2.0 — First public release
 
 The first public release of the **UBAG Web Layer** — the open reference
-implementation of an `agents.json` + behavioral-credential mechanism for
+implementation of a `ubag.json` + behavioral-credential mechanism for
 autonomous agents at the web edge. Two SDKs (Python + Node) with a shared,
 cross-verifiable wire format.
 
@@ -23,7 +23,9 @@ cross-verifiable wire format.
     without holding a secret (the OAuth/OIDC model).
 - **Three-branch routing**: humans → transparent proxy (A); credentialed agents
   → clean JSON-LD (B); unknown agents → cryptographic challenge (C).
-- **`agents.json`** discovery served automatically on every UBAG site.
+- **`ubag.json`** discovery (at `/.well-known/ubag.json`, alias `/agents.json`)
+  served automatically on every UBAG site — deliberately not named `agents.json`
+  to avoid colliding with unrelated specs already using that filename.
 - **Self-issuing by default** — a site configured with an issuer key mints
   credentials at its own `/ubag/verify`; no hosted central registry required.
 - **Cross-SDK interop**: a signature or credential produced by the Python SDK
