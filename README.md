@@ -1,8 +1,20 @@
-# UBAG Protocol
+# UBAG Web Layer
+### Universal Behavioral Authorization Gateway — Web Layer
 
-**The missing identity layer for MCP agents.**
+**Agent identity and routing at the web edge. The open reference implementation.**
 
-MCP solved how agents communicate. UBAG solves *who the agent is* — and what a website does about it.
+When an autonomous agent visits a website, UBAG verifies *who it is* and routes
+accordingly: humans to your normal site, credentialed agents to clean JSON-LD,
+unknown bots to a cryptographic challenge. MCP standardized how agents talk to
+tools — it left a gap at the web layer: agent identity when no human is in the
+loop. This is that layer.
+
+> **Where this fits.** UBAG has two layers. The **Gateway** governs what an agent
+> is allowed to *do* against credentialed systems and MCP tools; this **Web Layer**
+> governs how an agent *reaches* a website. This repo is the open, MIT-licensed
+> reference implementation of the Web Layer — and of an open mechanism any site can
+> adopt (`agents.json` discovery + a sign-the-nonce challenge + `X-UBAG-Credential`),
+> not a product you have to buy into.
 
 > **Status:** early but real. Two working SDKs (Python + Node) with a shared,
 > cross-verifiable wire format. Not yet published to PyPI/npm — install from source.
@@ -270,7 +282,7 @@ cd ubag-node && npm install && npm test
 
 ## Contributing
 
-PRs welcome. The goal is to make UBAG the standard credential layer for autonomous MCP agents — open, verifiable, and not owned by any cloud provider.
+PRs welcome. The goal isn't to make everyone adopt "UBAG" — it's to make the *mechanism* easy to adopt: `agents.json` discovery, a sign-the-nonce challenge, and a portable `X-UBAG-Credential` that any site can verify without a shared secret. Open, verifiable, and not owned by any cloud provider. UBAG is just the reference implementation.
 
 ---
 
