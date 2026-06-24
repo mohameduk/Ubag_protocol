@@ -35,18 +35,14 @@ cross-verifiable wire format.
 
 ### SDKs
 
-- `ubag-python` (FastAPI / Starlette)
-- `ubag-node` (Express)
+- `ubag-python` (FastAPI / Starlette) — published on PyPI as `ubag`
+- `ubag-node` (Express) — published on npm as `ubag-web`
 
 ### Install
 
-Not yet published to PyPI / npm — install from source:
-
 ```bash
-# Python
-cd ubag-python && pip install -e ".[fastapi]"
-# Node
-npm install --prefix ubag-node
+pip install "ubag[fastapi]"   # Python
+npm install ubag-web          # Node
 ```
 
 ### Known limitations (see SECURITY.md)

@@ -1,7 +1,7 @@
 {
-  "name": "ubag",
+  "name": "ubag-web",
   "version": "0.2.0",
-  "description": "Agent identity and routing middleware for MCP-compatible agents",
+  "description": "UBAG Web Layer — agent identity and routing middleware for MCP-compatible agents (Express)",
   "main": "src/index.js",
   "files": ["src", "README.md", "LICENSE"],
   "keywords": ["mcp", "agents", "ai", "middleware", "routing", "bot-detection"],
