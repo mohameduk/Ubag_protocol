@@ -235,7 +235,6 @@ Like `robots.txt`, but machine-actionable — agents fetch it before making requ
 | Autonomous agent support (no browser) | ❌ | ❌ | ✅ |
 | Open source | ❌ | ❌ | ✅ |
 | Vendor lock-in | Cloudflare | AWS | None |
-| Payment to website owner | ❌ | ❌ | 🔜 planned |
 
 Cloudflare and AWS block or filter bots. UBAG **graduates** them: an unknown agent can solve the challenge, get credentialed, and become authorized — no legitimate agent is permanently blocked. *(Competitor columns reflect general capabilities at time of writing; verify against current vendor docs.)*
 
