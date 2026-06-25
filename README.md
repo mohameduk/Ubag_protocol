@@ -1,11 +1,21 @@
+<div align="center">
+
+<!-- Banner: save the UBAG Weblayer logo as docs/banner.png, then uncomment the line below -->
+<!-- <img src="docs/banner.png" alt="UBAG Web Layer" width="100%" /> -->
+
 # UBAG Web Layer
-### Universal Behavioral Authorization Gateway — Web Layer
+
+**Universal Behavioral Authorization Gateway — Web Layer**
 
 [![CI](https://github.com/mohameduk/Ubag_protocol/actions/workflows/ci.yml/badge.svg)](https://github.com/mohameduk/Ubag_protocol/actions/workflows/ci.yml)
+[![PyPI](https://img.shields.io/pypi/v/ubag)](https://pypi.org/project/ubag/)
+[![npm](https://img.shields.io/npm/v/ubag-web)](https://www.npmjs.com/package/ubag-web)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![status: experimental](https://img.shields.io/badge/status-experimental-orange.svg)](#project-status)
 
 **Agent identity and routing at the web edge. The open reference implementation.**
+
+</div>
 
 When an autonomous agent visits a website, UBAG verifies *who it is* and routes
 accordingly: humans to your normal site, credentialed agents to clean JSON-LD,
@@ -45,23 +55,13 @@ UBAG fills that gap.
 
 Every request to a UBAG-enabled site is routed through a 3-branch matrix:
 
-```
-Incoming request
-        │
-        ▼
-┌───────────────────┐
-│  UBAG middleware  │
-└───────────────────┘
-        │
-        ├── Has valid UBAG credential?  ──► Branch B: Clean JSON-LD data
-        │                                   Structured. No HTML parsing.
-        │
-        ├── Looks human?  ───────────────► Branch A: Transparent proxy
-        │                                   Origin server, untouched.
-        │
-        └── Unknown agent?  ─────────────► Branch C: Sandbox + challenge
-                                            Sign a nonce with your Ed25519 key.
-                                            Prove identity → get credentialed.
+```mermaid
+flowchart TD
+    R[Incoming request] --> M{UBAG middleware}
+    M -->|Valid X-UBAG-Credential| B["Branch B — Clean JSON-LD<br/>structured data, no HTML parsing"]
+    M -->|Looks human| A["Branch A — Transparent proxy<br/>origin server, untouched"]
+    M -->|Unknown agent| C["Branch C — Sandbox + challenge<br/>sign a nonce with your Ed25519 key"]
+    C -->|signature verified → credential issued| B
 ```
 
 **Branch B is the key insight.** Instead of an agent crawling 50 pages to understand a business, UBAG serves one structured JSON-LD response — products, prices, policies, contacts. One request, no HTML parsing, far fewer extraction errors.
