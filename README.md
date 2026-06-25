@@ -1,6 +1,6 @@
 <div align="center">
 
-Banner: save the UBAG Weblayer logo as docs/banner.png, then uncomment the line below
+
 <img src="docs/banner.png" alt="UBAG Web Layer" width="100%" />
 
 # UBAG Web Layer
