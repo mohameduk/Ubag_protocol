@@ -1,10 +1,16 @@
 # Changelog
 
-## Unreleased — Branch B auto structured data
+## v0.4.0 — Branch B auto structured data
 
 Removes the biggest Branch B adoption barrier: hand-writing `site_meta`. Point
 the gateway at your origin and it serves agents the structured data your site
 already publishes — zero config. Both SDKs (Python + Node) at parity.
+
+> ⚠️ **Default-behavior change.** With an `origin` configured, Branch B now
+> auto-extracts from the origin's HTML and includes a Markdown content layer by
+> default (`auto_extract`, `include_markdown` on). Existing `site_meta` callers
+> are unaffected — it still overrides. Set `auto_extract=False` to restore the
+> classic manual behavior.
 
 ### Added
 
