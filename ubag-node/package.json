@@ -1,6 +1,6 @@
 {
   "name": "ubag-web",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "UBAG Web Layer — agent identity and routing middleware for MCP-compatible agents (Express)",
   "main": "src/index.js",
   "files": ["src", "README.md", "LICENSE"],
