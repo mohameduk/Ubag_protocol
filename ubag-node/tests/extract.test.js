@@ -3,6 +3,7 @@
 const fs = require('fs');
 const path = require('path');
 const { extractStructuredData, ogTypeToSchema } = require('../src/extract');
+const { htmlToMarkdown } = require('../src/markdown');
 const { buildJsonldResponse } = require('../src/sux');
 const { TTLCache } = require('../src/cache');
 const { originHtml } = require('../src/middleware/express');
@@ -77,6 +78,48 @@ test('backward compatible without html', () => {
   expect(p['@type']).toBe('Store');
   expect(p.name).toBe('Acme');
   expect(p['ubag:declared']).toBeUndefined();
+  expect(p['ubag:content']).toBeUndefined();
+});
+
+// ── Markdown content layer ─────────────────────────────────────────────────
+
+const PROSE = `<html><head><title>Guide</title><script>x=1</script></head>
+<body><nav><a href="/">home</a></nav><main>
+<h1>Widget Guide</h1>
+<p>The <strong>blue</strong> widget is <em>great</em>. See <a href="/buy">buy</a>.</p>
+<ul><li>Durable</li><li>Light</li></ul>
+</main><footer>nav junk</footer></body></html>`;
+
+test('markdown strips boilerplate and formats', () => {
+  const md = htmlToMarkdown(PROSE);
+  expect(md).toContain('# Widget Guide');
+  expect(md).toContain('**blue**');
+  expect(md).toContain('*great*');
+  expect(md).toContain('[buy](/buy)');
+  expect(md).toContain('- Durable');
+  expect(md).not.toContain('nav junk');
+  expect(md).not.toContain('x=1');
+});
+
+test('markdown truncates to maxChars', () => {
+  const md = htmlToMarkdown('<body><p>' + 'word '.repeat(500) + '</p></body>', 100);
+  expect(md.length).toBeLessThanOrEqual(130);
+  expect(md.endsWith('[truncated]')).toBe(true);
+});
+
+test('content layer labeled and marks confidence', () => {
+  const p = buildJsonldResponse('acme.com', '/guide', {}, { sub: 'ubag:a1' }, PROSE, { includeMarkdown: true });
+  expect(p['ubag:content'].format).toBe('markdown');
+  expect(p['ubag:content'].source).toBe('extracted');
+  expect(p['ubag:content'].text).toContain('# Widget Guide');
+  expect(p['ubag:provenance'].sources).toContain('content-markdown');
+  expect(['mixed', 'extracted']).toContain(p['ubag:provenance'].confidence);
+});
+
+test('content layer off by default in builder', () => {
+  const p = buildJsonldResponse('acme.com', '/guide', {}, {}, PROSE);
+  expect(p['ubag:content']).toBeUndefined();
+  expect(p['ubag:provenance'].confidence).toBe('declared');
 });
 
 // ── TTLCache + origin fetch glue ───────────────────────────────────────────

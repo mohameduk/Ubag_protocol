@@ -73,6 +73,8 @@ class UBAGMiddleware(BaseHTTPMiddleware):
         auto_extract: bool = True,
         extract_cache_ttl: int = 300,
         extract_cache_size: int = 256,
+        include_markdown: bool = True,
+        content_max_chars: int = 20000,
     ) -> None:
         super().__init__(app)
         self.origin              = origin.rstrip("/")
@@ -115,6 +117,11 @@ class UBAGMiddleware(BaseHTTPMiddleware):
         # overrides. Fetched HTML is cached (bounded LRU + TTL).
         self.auto_extract        = auto_extract
         self._html_cache         = TTLCache(max_size=extract_cache_size, ttl=extract_cache_ttl)
+        # Serve readable page content as clearly-labeled Markdown alongside the
+        # declared JSON-LD (honest fallback for pages without full structured
+        # data). Marked source=extracted, never mixed into the typed fields.
+        self.include_markdown    = include_markdown
+        self.content_max_chars   = content_max_chars
 
         self._http_client: httpx.AsyncClient | None = None
 
@@ -216,6 +223,8 @@ class UBAGMiddleware(BaseHTTPMiddleware):
             site_meta=self.site_meta,
             agent_claims=claims or {},
             html=html,
+            include_markdown=self.include_markdown,
+            content_max_chars=self.content_max_chars,
         )
         return JSONResponse(
             content=payload,

@@ -10,8 +10,10 @@
  * and an escape hatch for data the page does not expose.
  */
 const { extractStructuredData, ogTypeToSchema } = require('./extract');
+const { htmlToMarkdown } = require('./markdown');
 
-function buildJsonldResponse(host, path, siteMeta, claims, html = null) {
+function buildJsonldResponse(host, path, siteMeta, claims, html = null, opts = {}) {
+  const { includeMarkdown = false, contentMaxChars = 20000 } = opts;
   const now = Math.floor(Date.now() / 1000);
   siteMeta = siteMeta || {};
   const sources = [];
@@ -66,14 +68,30 @@ function buildJsonldResponse(host, path, siteMeta, claims, html = null) {
   }
   if (Object.keys(siteMeta).length) sources.push('site_meta');
 
+  // ── Inferred content layer (labeled, never mixed into typed fields) ────────
+  let hasMarkdown = false;
+  if (html && includeMarkdown) {
+    const markdown = htmlToMarkdown(html, contentMaxChars);
+    if (markdown) {
+      hasMarkdown = true;
+      // Namespaced and marked source=extracted so an agent (or the gateway) can
+      // tell this apart from declared, typed data and treat it as advisory prose.
+      base['ubag:content'] = { format: 'markdown', source: 'extracted', text: markdown };
+      sources.push('content-markdown');
+    }
+  }
+
   // ── UBAG envelope + provenance ─────────────────────────────────────────────
   base['ubag:source'] = `https://${host}`;
   base['ubag:served_at'] = now;
   base['ubag:agent'] = claims && claims.sub ? claims.sub : 'unknown';
   base['ubag:branch'] = 'B-AGENT';
   if (declaredNodes.length) base['ubag:declared'] = declaredNodes;
+
+  const declaredPresent = declaredNodes.length > 0 || sources.includes('opengraph') || siteFields.length > 0;
+  const confidence = hasMarkdown ? (declaredPresent ? 'mixed' : 'extracted') : 'declared';
   base['ubag:provenance'] = {
-    confidence: 'declared', // Tier 1 is all owner-declared; nothing inferred
+    confidence,
     sources: [...new Set(sources)].sort(),
     fields_from_site_meta: siteFields.slice().sort(),
   };

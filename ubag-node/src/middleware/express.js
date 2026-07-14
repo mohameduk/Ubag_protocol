@@ -24,6 +24,8 @@ function ubag(options = {}) {
     autoExtract = true,
     extractCacheTtl = 300,
     extractCacheSize = 256,
+    includeMarkdown = true,
+    contentMaxChars = 20000,
   } = options;
 
   // Tier 1 auto-extraction: harvest the origin's declared structured data for
@@ -99,7 +101,10 @@ function ubag(options = {}) {
       }
       const host = (req.headers.host || '').split(':')[0];
       const html = await originHtml(origin, path, { autoExtract, cache: htmlCache });
-      const payload = buildJsonldResponse(host, path, siteMeta, claims || {}, html);
+      const payload = buildJsonldResponse(host, path, siteMeta, claims || {}, html, {
+        includeMarkdown,
+        contentMaxChars,
+      });
       res.setHeader('X-UBAG-Branch', 'B-AGENT');
       res.setHeader(CREDENTIAL_HEADER, token);
       return res.status(200).type('application/ld+json').json(payload);

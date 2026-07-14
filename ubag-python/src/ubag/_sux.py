@@ -17,6 +17,7 @@ import time
 from typing import Any
 
 from ubag._extract import extract_structured_data, og_type_to_schema
+from ubag._markdown import html_to_markdown
 
 
 def build_jsonld_response(
@@ -25,6 +26,8 @@ def build_jsonld_response(
     site_meta: dict[str, Any],
     agent_claims: dict,
     html: str | None = None,
+    include_markdown: bool = False,
+    content_max_chars: int | None = 20000,
 ) -> dict:
     """
     Build a JSON-LD structured-data response for Branch B agents.
@@ -100,6 +103,22 @@ def build_jsonld_response(
     if site_meta:
         sources.append("site_meta")
 
+    # ── Inferred content layer (labeled, never mixed into typed fields) ───────
+    has_markdown = False
+    if html and include_markdown:
+        markdown = html_to_markdown(html, max_chars=content_max_chars)
+        if markdown:
+            has_markdown = True
+            # Deliberately namespaced and marked source=extracted so an agent
+            # (or the gateway) can tell this apart from declared, typed data and
+            # treat it as advisory prose, not verified facts.
+            base["ubag:content"] = {
+                "format": "markdown",
+                "source": "extracted",
+                "text": markdown,
+            }
+            sources.append("content-markdown")
+
     # ── UBAG envelope + provenance ────────────────────────────────────────────
     base["ubag:source"] = f"https://{host}"
     base["ubag:served_at"] = now
@@ -107,9 +126,16 @@ def build_jsonld_response(
     base["ubag:branch"] = "B-AGENT"
     if declared_nodes:
         base["ubag:declared"] = declared_nodes
+
+    # confidence: declared typed data is always owner-declared; the markdown
+    # content is inferred/extracted. "mixed" when both are present.
+    declared_present = bool(declared_nodes) or "opengraph" in sources or bool(site_fields)
+    if has_markdown:
+        confidence = "mixed" if declared_present else "extracted"
+    else:
+        confidence = "declared"
     base["ubag:provenance"] = {
-        # Tier 1 is all owner-declared; nothing here is inferred.
-        "confidence": "declared",
+        "confidence": confidence,
         "sources": sorted(set(sources)),
         "fields_from_site_meta": sorted(site_fields),
     }

@@ -1,5 +1,6 @@
 """Tier 1 extraction + envelope tests — harvest declared structured data."""
 from ubag._extract import extract_structured_data
+from ubag._markdown import html_to_markdown
 from ubag._sux import build_jsonld_response
 
 
@@ -146,3 +147,60 @@ def test_backward_compatible_without_html():
     assert payload["name"] == "Acme"
     assert payload["ubag:branch"] == "B-AGENT"
     assert "ubag:declared" not in payload
+    assert "ubag:content" not in payload
+
+
+# ── Markdown content layer (honest fallback, labeled) ─────────────────────────
+
+PAGE_WITH_PROSE = """
+<html><head><title>Guide</title><script>x=1</script></head>
+<body>
+<nav><a href="/">home</a></nav>
+<main>
+<h1>Widget Guide</h1>
+<p>The <strong>blue</strong> widget is <em>great</em>. See <a href="/buy">buy</a>.</p>
+<ul><li>Durable</li><li>Light</li></ul>
+</main>
+<footer>© Acme, nav junk</footer>
+</body></html>
+"""
+
+
+def test_markdown_strips_boilerplate_and_formats():
+    md = html_to_markdown(PAGE_WITH_PROSE)
+    assert "# Widget Guide" in md
+    assert "**blue**" in md and "*great*" in md
+    assert "[buy](/buy)" in md
+    assert "- Durable" in md
+    # boilerplate gone
+    assert "nav junk" not in md and "home" not in md and "x=1" not in md
+
+
+def test_markdown_truncates_to_max_chars():
+    md = html_to_markdown("<body><p>" + ("word " * 500) + "</p></body>", max_chars=100)
+    assert len(md) <= 130 and md.endswith("[truncated]")
+
+
+def test_content_layer_labeled_and_marks_confidence_mixed():
+    payload = build_jsonld_response(
+        host="acme.com", path="/guide", site_meta={},
+        agent_claims={"sub": "ubag:a1"}, html=PAGE_WITH_PROSE,
+        include_markdown=True,
+    )
+    content = payload["ubag:content"]
+    assert content["format"] == "markdown"
+    assert content["source"] == "extracted"          # honest: not verified
+    assert "# Widget Guide" in content["text"]
+    assert "content-markdown" in payload["ubag:provenance"]["sources"]
+    # no declared JSON-LD here, but OG/site typed fields absent → extracted
+    assert payload["ubag:provenance"]["confidence"] in ("mixed", "extracted")
+
+
+def test_content_layer_off_by_default_in_builder():
+    # Builder stays declared-only unless asked; middleware opts in.
+    payload = build_jsonld_response(
+        host="acme.com", path="/guide", site_meta={},
+        agent_claims={}, html=PAGE_WITH_PROSE,
+    )
+    assert "ubag:content" not in payload
+    assert payload["ubag:provenance"]["confidence"] == "declared"
