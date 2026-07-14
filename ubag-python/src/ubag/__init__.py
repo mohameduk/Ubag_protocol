@@ -18,7 +18,7 @@ from ubag._keys import (
 )
 from ubag.agent import AgentCredential
 
-__version__ = "0.2.0"
+__version__ = "0.3.0"
 __all__ = [
     "UBAGMiddleware",
     "AgentCredential",

@@ -1,5 +1,37 @@
 # Changelog
 
+## v0.3.0 — Security hardening
+
+Defense-in-depth hardening of the gateway. Both SDKs (Python + Node) at parity;
+CI green on Python 3.10–3.12 and Node 18–22.
+
+> ⚠️ **Breaking change for agents.** Credentialed requests now require a
+> proof-of-possession header by default. Agents built on `AgentCredential`
+> should call `headers(method, path)` (which now signs the PoP automatically);
+> agents hand-rolling headers must add `X-UBAG-PoP` + `X-UBAG-PoP-TS`. To keep
+> the old bearer behavior during migration, construct the middleware with
+> `require_pop=False` (Python) / `requirePop: false` (Node).
+
+### Security
+
+- **Holder-of-key credentials (proof-of-possession).** The agent branch now
+  verifies a per-request Ed25519 signature over `"METHOD PATH TIMESTAMP"`
+  against the key bound in the credential's `cnf` claim. A leaked or stolen
+  credential is now useless without the agent's private key, closing the
+  bearer-token replay window. Default on via `require_pop` / `requirePop`.
+- **Upstream TLS verification on by default (Python).** The Branch A proxy now
+  verifies upstream certificates (`verify_tls=True`); opt out only per trusted
+  origin. (The Node proxy already verified.)
+- **No predictable stamp key.** The middleware refuses to start when neither a
+  server secret nor an issuer key is configured, instead of deriving a
+  guessable HMAC nonce-stamp key from a known constant.
+
+### Tests
+
+- Adds five security regression tests per SDK: bare-bearer replay rejected,
+  wrong-key PoP rejected, stale-timestamp PoP rejected, legacy bearer mode
+  (`require_pop=False`) still works, and the refuse-to-start guard.
+
 ## v0.2.0 — First public release
 
 The first public release of the **UBAG Web Layer** — the open reference
