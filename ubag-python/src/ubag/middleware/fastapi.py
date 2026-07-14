@@ -33,6 +33,7 @@ from starlette.responses import JSONResponse, Response
 
 from ubag._agents_json import build_agents_json
 from ubag._challenge import generate_challenge, verify_challenge, verify_pop
+from ubag._cache import TTLCache
 from ubag._credential import CREDENTIAL_HEADER, issue_credential, validate_credential
 from ubag._keys import build_jwks, issuer_public_from_private
 from ubag._routing import RoutingBranch, resolve_branch
@@ -69,6 +70,11 @@ class UBAGMiddleware(BaseHTTPMiddleware):
         on_verified: Optional[Callable] = None,
         verify_tls: bool = True,
         require_pop: bool = True,
+        auto_extract: bool = True,
+        extract_cache_ttl: int = 300,
+        extract_cache_size: int = 256,
+        include_markdown: bool = True,
+        content_max_chars: int = 20000,
     ) -> None:
         super().__init__(app)
         self.origin              = origin.rstrip("/")
@@ -105,6 +111,17 @@ class UBAGMiddleware(BaseHTTPMiddleware):
         # SECURITY: require proof-of-possession on credentialed requests so a
         # stolen credential (bearer token) is useless without the agent key.
         self.require_pop         = require_pop
+        # Tier 1 auto-extraction: harvest the origin's declared structured data
+        # (JSON-LD/OG/meta) for Branch B instead of requiring hand-written
+        # site_meta. Only runs when an origin is configured; site_meta always
+        # overrides. Fetched HTML is cached (bounded LRU + TTL).
+        self.auto_extract        = auto_extract
+        self._html_cache         = TTLCache(max_size=extract_cache_size, ttl=extract_cache_ttl)
+        # Serve readable page content as clearly-labeled Markdown alongside the
+        # declared JSON-LD (honest fallback for pages without full structured
+        # data). Marked source=extracted, never mixed into the typed fields.
+        self.include_markdown    = include_markdown
+        self.content_max_chars   = content_max_chars
 
         self._http_client: httpx.AsyncClient | None = None
 
@@ -153,7 +170,7 @@ class UBAGMiddleware(BaseHTTPMiddleware):
                     headers={"X-UBAG-Branch": "B-DENIED"},
                 )
             else:
-                response = self._branch_b(request, cred_token)
+                response = await self._branch_b(request, cred_token)
         elif branch == RoutingBranch.SANDBOX:
             response = self._branch_c(request)
         else:
@@ -196,14 +213,18 @@ class UBAGMiddleware(BaseHTTPMiddleware):
     # Branch B — Authorized agent → JSON-LD
     # ------------------------------------------------------------------
 
-    def _branch_b(self, request: Request, token: str) -> JSONResponse:
+    async def _branch_b(self, request: Request, token: str) -> JSONResponse:
         claims  = validate_credential(token, self.issuer_public)
         host    = request.headers.get("host", "").split(":")[0]
+        html    = await self._origin_html(request.url.path)
         payload = build_jsonld_response(
             host=host,
             path=request.url.path,
             site_meta=self.site_meta,
             agent_claims=claims or {},
+            html=html,
+            include_markdown=self.include_markdown,
+            content_max_chars=self.content_max_chars,
         )
         return JSONResponse(
             content=payload,
@@ -213,6 +234,28 @@ class UBAGMiddleware(BaseHTTPMiddleware):
                 CREDENTIAL_HEADER: token,
             },
         )
+
+    async def _origin_html(self, path: str) -> str | None:
+        """Fetch the origin's HTML for `path` so Tier 1 can harvest its declared
+        structured data. Cached (bounded LRU + TTL). Returns None — and the
+        builder falls back to site_meta only — when extraction is off, no origin
+        is configured, the fetch fails, or the response is not HTML.
+        """
+        if not (self.auto_extract and self.origin):
+            return None
+        cached = self._html_cache.get(path)
+        if cached is not None:
+            return cached or None  # "" is a cached negative result
+        try:
+            client = self._get_http_client()
+            url = f"{self.origin}/{path.lstrip('/')}"
+            resp = await client.get(url, headers={"accept": "text/html"})
+            ctype = resp.headers.get("content-type", "")
+            html = resp.text if ("html" in ctype and resp.status_code == 200) else ""
+        except Exception:
+            html = ""
+        self._html_cache.set(path, html)  # cache negatives too, to avoid refetch storms
+        return html or None
 
     # ------------------------------------------------------------------
     # Branch A — Human → transparent proxy to origin

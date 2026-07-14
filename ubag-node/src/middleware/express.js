@@ -7,6 +7,8 @@ const { CREDENTIAL_HEADER, issueCredential, validateCredential } = require('../c
 const { generateChallenge, verifyChallenge, verifyPop } = require('../challenge');
 const { issuerPublicFromPrivate, buildJwks } = require('../keys');
 const { buildAgentsJson } = require('../agentsJson');
+const { buildJsonldResponse } = require('../sux');
+const { TTLCache } = require('../cache');
 
 function ubag(options = {}) {
   const {
@@ -19,7 +21,17 @@ function ubag(options = {}) {
     auditFn = null,
     onVerified = null,
     requirePop = true,
+    autoExtract = true,
+    extractCacheTtl = 300,
+    extractCacheSize = 256,
+    includeMarkdown = true,
+    contentMaxChars = 20000,
   } = options;
+
+  // Tier 1 auto-extraction: harvest the origin's declared structured data for
+  // Branch B instead of requiring hand-written siteMeta. Only when an origin is
+  // configured; siteMeta always overrides. Fetched HTML is cached (LRU + TTL).
+  const htmlCache = new TTLCache(extractCacheSize, extractCacheTtl);
 
   const issuerPrivate = issuerKey;
   const issuerPublic = issuerPrivate ? issuerPublicFromPrivate(issuerPrivate) : issuerPublicKey;
@@ -88,7 +100,11 @@ function ubag(options = {}) {
         });
       }
       const host = (req.headers.host || '').split(':')[0];
-      const payload = buildJsonLd(host, path, siteMeta, claims || {});
+      const html = await originHtml(origin, path, { autoExtract, cache: htmlCache });
+      const payload = buildJsonldResponse(host, path, siteMeta, claims || {}, html, {
+        includeMarkdown,
+        contentMaxChars,
+      });
       res.setHeader('X-UBAG-Branch', 'B-AGENT');
       res.setHeader(CREDENTIAL_HEADER, token);
       return res.status(200).type('application/ld+json').json(payload);
@@ -201,18 +217,26 @@ function popOk(claims, req) {
   );
 }
 
-function buildJsonLd(host, path, siteMeta, claims) {
-  return {
-    '@context': 'https://schema.org',
-    '@type': siteMeta.type || 'WebSite',
-    url: `https://${host}${path}`,
-    name: siteMeta.name || host,
-    ...siteMeta,
-    'ubag:source': `https://${host}`,
-    'ubag:served_at': Math.floor(Date.now() / 1000),
-    'ubag:agent': claims.sub || 'unknown',
-    'ubag:branch': 'B-AGENT',
-  };
+async function originHtml(origin, path, { autoExtract, cache, fetchImpl = fetch }) {
+  // Fetch the origin's HTML for `path` so Tier 1 can harvest its declared
+  // structured data. Cached (bounded LRU + TTL). Returns null — and the builder
+  // falls back to siteMeta only — when extraction is off, no origin is set, the
+  // fetch fails, or the response is not HTML. Negatives are cached too, to avoid
+  // refetch storms. `fetchImpl` is injectable for testing; defaults to undici.
+  if (!autoExtract || !origin) return null;
+  const cached = cache.get(path);
+  if (cached !== undefined) return cached || null; // '' is a cached negative
+  let html = '';
+  try {
+    const url = `${origin.replace(/\/$/, '')}/${path.replace(/^\//, '')}`;
+    const resp = await fetchImpl(url, { headers: { accept: 'text/html' } });
+    const ctype = resp.headers.get('content-type') || '';
+    html = resp.status === 200 && ctype.includes('html') ? await resp.text() : '';
+  } catch {
+    html = '';
+  }
+  cache.set(path, html);
+  return html || null;
 }
 
-module.exports = { ubag };
+module.exports = { ubag, originHtml };

@@ -58,13 +58,53 @@ Every request to a UBAG-enabled site is routed through a 3-branch matrix:
 ```mermaid
 flowchart TD
     R[Incoming request] --> M{UBAG middleware}
-    M -->|Valid X-UBAG-Credential| B["Branch B — Clean JSON-LD<br/>structured data, no HTML parsing"]
+    M -->|Valid X-UBAG-Credential| B["Branch B — Auto structured data<br/>declared JSON-LD + labeled content"]
     M -->|Looks human| A["Branch A — Transparent proxy<br/>origin server, untouched"]
     M -->|Unknown agent| C["Branch C — Sandbox + challenge<br/>sign a nonce with your Ed25519 key"]
     C -->|signature verified → credential issued| B
 ```
 
-**Branch B is the key insight.** Instead of an agent crawling 50 pages to understand a business, UBAG serves one structured JSON-LD response — products, prices, policies, contacts. One request, no HTML parsing, far fewer extraction errors.
+**Branch B is the key insight.** Instead of an agent crawling 50 pages to understand a business, UBAG serves one structured response — products, prices, policies, contacts. One request, no HTML parsing, far fewer extraction errors.
+
+And it's **zero-config**: point UBAG at your origin and it automatically harvests the structured data your site *already publishes* for search engines (JSON-LD, OpenGraph, meta) — no hand-written metadata required. See [Branch B: automatic structured data](#branch-b-automatic-structured-data).
+
+---
+
+## Branch B: automatic structured data
+
+Most sites already publish structured data for Google — `<script type="application/ld+json">`, OpenGraph, meta tags. UBAG re-serves that to authorized agents automatically. **Point it at your origin and Branch B just works; `site_meta` is optional.**
+
+What an agent receives is one JSON-LD envelope with a **machine-readable trust boundary**:
+
+```jsonc
+{
+  "@context": "https://schema.org",
+  "@type": "Product",                 // ← declared: the owner's own JSON-LD/OG
+  "name": "Blue Widget",
+  "ubag:declared": [ /* the site's JSON-LD, passed through verbatim */ ],
+  "ubag:content": {                    // ← inferred: readable page text
+    "format": "markdown",
+    "source": "extracted",            //   explicitly NOT verified structured data
+    "text": "# Blue Widget\n\nThe **best** blue widget…"
+  },
+  "ubag:provenance": {
+    "confidence": "mixed",            // declared | extracted | mixed
+    "sources": ["json-ld", "opengraph", "content-markdown"],
+    "fields_from_site_meta": []
+  }
+}
+```
+
+Two tiers, by **confidence, not depth**:
+
+1. **Declared → typed JSON-LD.** Parsed from the site's own JSON-LD / OpenGraph / meta and passed through under `ubag:declared`. 100% owner-authored — nothing is inferred, so an agent can act on it.
+2. **Everything else → labeled Markdown.** Readable page content (boilerplate stripped) served as `ubag:content` with `source: "extracted"`. UBAG deliberately does **not** guess types for prose — a regex that calls `$19.99` a "price" is a lie an agent would act on. Instead it hands over honest text, clearly marked as unverified.
+
+That labeling is the point: unlike a generic HTML-to-Markdown reader, UBAG tells the agent **which parts are trustworthy declared facts and which are just page text**. `site_meta` still works — it *overrides* the auto-extracted fields and is the escape hatch for declaring data your page doesn't expose.
+
+**Options** (all optional): `auto_extract` (default on), `include_markdown` / `includeMarkdown` (default on), `content_max_chars` / `contentMaxChars` (default 20000), and `extract_cache_ttl` / `extract_cache_size` for the bounded HTML cache. Set `auto_extract=False` for the classic manual-`site_meta` behavior.
+
+> Parity note: the declared JSON-LD is byte-identical across the Python and Node SDKs (verified by a shared golden fixture). The Markdown text is deterministic within each SDK and semantically equivalent across them, but not promised byte-identical (HTML-to-text differs by parser).
 
 ---
 
@@ -112,10 +152,12 @@ ISSUER_PRIVATE, ISSUER_PUBLIC = generate_issuer_keypair()   # EC P-256 (ES256)
 app = FastAPI()
 app.add_middleware(
     UBAGMiddleware,
-    origin="https://yoursite.com",   # Branch A proxy target
+    origin="https://yoursite.com",   # Branch A proxy target + Branch B auto-extraction source
     issuer_key=ISSUER_PRIVATE,       # mints + verifies agent credentials
     server_secret="a-random-32+char-string-for-nonce-stamping",
-    site_meta={"name": "My Store", "type": "Store", "description": "We sell widgets"},
+    # site_meta is now OPTIONAL — Branch B auto-extracts from your origin's HTML.
+    # Pass it only to override or supplement the auto-extracted fields:
+    # site_meta={"name": "My Store", "type": "Store"},
 )
 ```
 
@@ -124,7 +166,7 @@ deployment can pass `issuer_public_key` (or `UBAG_ISSUER_PUBLIC`) alone.
 
 Your site now:
 
-- ✅ Serves clean JSON-LD to credentialed MCP agents (Branch B)
+- ✅ Serves credentialed MCP agents auto-extracted JSON-LD + labeled content (Branch B) — no hand-written metadata
 - ✅ Proxies humans transparently to your origin (Branch A)
 - ✅ Sandboxes unknown agents with an Ed25519 nonce challenge (Branch C)
 - ✅ Serves `yoursite.com/.well-known/ubag.json` for agent discovery
@@ -143,7 +185,8 @@ app.use(ubag({
   origin: 'https://yoursite.com',
   issuerKey: ISSUER_PRIVATE,
   serverSecret: 'a-random-32+char-string-for-nonce-stamping',
-  siteMeta: { name: 'My Store', type: 'Store', description: 'We sell widgets' },
+  // siteMeta is OPTIONAL — Branch B auto-extracts from your origin's HTML.
+  // Pass it only to override or supplement: siteMeta: { name: 'My Store', type: 'Store' },
 }));
 ```
 
@@ -182,12 +225,14 @@ agent = AgentCredential.generate(owner="you@email.com")
 #   r = httpx.post(f"{site}/ubag/verify", json=solution)
 #   agent.set_credential(r.json()["credential"])
 
-# Once credentialed, it travels with every request:
-headers = agent.headers()
-# {"X-UBAG-Credential": "eyJ..."}
+# Once credentialed, attach headers per request. Credentials are holder-of-key:
+# headers(method, path) also signs a proof-of-possession over "METHOD PATH TS",
+# so a stolen credential is useless without your agent's private key.
+headers = agent.headers("GET", "/products")
+# {"X-UBAG-Credential": "eyJ...", "X-UBAG-PoP": "…", "X-UBAG-PoP-TS": "…"}
 ```
 
-UBAG-enabled sites recognize your agent and serve structured data instead of HTML. Your agent gets better data; the website owner gets visibility and control. The Node SDK exposes the same `AgentCredential` API.
+Proof-of-possession is required by default (the gateway can disable it with `require_pop=False`). UBAG-enabled sites recognize your agent and serve structured data instead of HTML. Your agent gets better data; the website owner gets visibility and control. The Node SDK exposes the same `AgentCredential` API (`agent.headers(method, path)`).
 
 ---
 
@@ -231,7 +276,8 @@ Like `robots.txt`, but machine-actionable — agents fetch it before making requ
 | | Cloudflare | AWS WAF | UBAG |
 |---|---|---|---|
 | Blocks unknown bots | ✅ | ✅ | Challenges them instead |
-| Structured data for agents | Markdown (AI features) | ❌ | ✅ JSON-LD |
+| Structured data for agents | Markdown (AI features) | ❌ | ✅ JSON-LD **+** labeled Markdown, with a trust boundary |
+| Auto-extracts your existing structured data | ❌ | ❌ | ✅ zero-config from JSON-LD/OG/meta |
 | Cryptographic agent identity / credential | ❌ | ❌ | ✅ |
 | Autonomous agent support (no browser) | ❌ | ❌ | ✅ |
 | Open source | ❌ | ❌ | ✅ |
@@ -263,8 +309,8 @@ A UBAG credential is issued once and verified in-process by the site's middlewar
 ## Repository Layout
 
 ```
-ubag-python/    Python middleware — FastAPI / Starlette today (v0.2.0)
-ubag-node/      Node middleware — Express today (v0.2.0)
+ubag-python/    Python middleware — FastAPI / Starlette today (v0.3.0)
+ubag-node/      Node middleware — Express today (v0.3.0)
 ```
 
 Both packages implement the full protocol (routing, credentials, challenge, keys,
@@ -288,9 +334,11 @@ cd ubag-node && npm install && npm test
 
 **Working today**
 - [x] Branch A — human transparent proxy
-- [x] Branch B — agent JSON-LD structured data
+- [x] Branch B — agent structured data, **auto-extracted** from the origin (JSON-LD/OG/meta) with zero config
+- [x] Branch B content layer — readable page text as labeled Markdown (`ubag:content`, `source: extracted`) with a machine-readable trust boundary
 - [x] Branch C — sandbox + Ed25519 nonce challenge
 - [x] Asymmetric crypto — Ed25519 agent identity + ES256/JWKS credentials, no shared secrets
+- [x] Holder-of-key credentials — per-request proof-of-possession (default on), upstream TLS verification
 - [x] `ubag.json` discovery — served on every UBAG site (alias: `/agents.json`)
 - [x] Audit hook — `audit_fn` callback on every request
 - [x] Python SDK (FastAPI/Starlette) + Node SDK (Express), cross-SDK verified
