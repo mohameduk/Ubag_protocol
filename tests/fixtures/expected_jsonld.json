@@ -1,0 +1,15 @@
+{
+  "product.html": [
+    {
+      "@context": "https://schema.org",
+      "@type": "Product",
+      "name": "Blue Widget",
+      "sku": "BW-1",
+      "offers": { "@type": "Offer", "price": "19.99", "priceCurrency": "USD" }
+    }
+  ],
+  "graph.html": [
+    { "@type": "Organization", "name": "Acme" },
+    { "@type": "WebSite", "name": "Acme Site", "url": "https://acme.com" }
+  ]
+}
