@@ -32,7 +32,7 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse, Response
 
 from ubag._agents_json import build_agents_json
-from ubag._challenge import generate_challenge, verify_challenge
+from ubag._challenge import generate_challenge, verify_challenge, verify_pop
 from ubag._credential import CREDENTIAL_HEADER, issue_credential, validate_credential
 from ubag._keys import build_jwks, issuer_public_from_private
 from ubag._routing import RoutingBranch, resolve_branch
@@ -67,6 +67,8 @@ class UBAGMiddleware(BaseHTTPMiddleware):
         credential_endpoint: str = "",
         audit_fn: Optional[Callable] = None,
         on_verified: Optional[Callable] = None,
+        verify_tls: bool = True,
+        require_pop: bool = True,
     ) -> None:
         super().__init__(app)
         self.origin              = origin.rstrip("/")
@@ -79,14 +81,30 @@ class UBAGMiddleware(BaseHTTPMiddleware):
         else:
             self.issuer_public = issuer_public_key or os.getenv("UBAG_ISSUER_PUBLIC", "")
         # HMAC key for stateless nonce stamping — the server signing to itself.
-        self.server_secret       = (
-            server_secret or os.getenv("UBAG_SERVER_SECRET")
-            or hashlib.sha256((self.issuer_private or "ubag-stamp").encode()).hexdigest()
-        )
+        # SECURITY: never fall back to a world-known constant. If nothing binds
+        # this server's stamp key to a secret, refuse to start rather than let an
+        # attacker forge nonce stamps under sha256("ubag-stamp").
+        explicit_secret = server_secret or os.getenv("UBAG_SERVER_SECRET")
+        if explicit_secret:
+            self.server_secret = explicit_secret
+        elif self.issuer_private:
+            self.server_secret = hashlib.sha256(self.issuer_private.encode()).hexdigest()
+        else:
+            raise ValueError(
+                "UBAG: no server_secret and no issuer_key configured. Refusing to "
+                "start with a predictable HMAC stamp key. Set UBAG_SERVER_SECRET "
+                "(or provide issuer_key)."
+            )
         self.site_meta           = site_meta or {}
         self.credential_endpoint = credential_endpoint
         self.audit_fn            = audit_fn
         self.on_verified         = on_verified
+        # SECURITY: verify upstream TLS certs by default. Only disable for
+        # explicitly trusted local/dev origins.
+        self.verify_tls          = verify_tls
+        # SECURITY: require proof-of-possession on credentialed requests so a
+        # stolen credential (bearer token) is useless without the agent key.
+        self.require_pop         = require_pop
 
         self._http_client: httpx.AsyncClient | None = None
 
@@ -119,7 +137,23 @@ class UBAGMiddleware(BaseHTTPMiddleware):
         )
 
         if branch == RoutingBranch.AGENT:
-            response = self._branch_b(request, cred_token)
+            if self.require_pop and not self._pop_ok(request, cred_token):
+                # Credential is valid but the caller did not prove possession of
+                # the bound agent key → fail closed. Defeats stolen-credential replay.
+                response = JSONResponse(
+                    status_code=401,
+                    content={
+                        "status": "pop_required",
+                        "error": (
+                            "Credential requires proof-of-possession. Sign "
+                            "'METHOD PATH TIMESTAMP' with your agent Ed25519 key and send "
+                            "X-UBAG-PoP (b64url signature) and X-UBAG-PoP-TS (unix seconds)."
+                        ),
+                    },
+                    headers={"X-UBAG-Branch": "B-DENIED"},
+                )
+            else:
+                response = self._branch_b(request, cred_token)
         elif branch == RoutingBranch.SANDBOX:
             response = self._branch_c(request)
         else:
@@ -135,6 +169,28 @@ class UBAGMiddleware(BaseHTTPMiddleware):
                 pass
 
         return response
+
+    # ------------------------------------------------------------------
+    # Proof-of-possession gate for credentialed requests
+    # ------------------------------------------------------------------
+
+    def _pop_ok(self, request: Request, token: str) -> bool:
+        """True if the request carries a valid proof-of-possession for the agent
+        key bound to the credential's `cnf` claim. A credential minted without a
+        bound key (no `cnf.pub`) cannot satisfy PoP and is rejected when
+        require_pop is on — credentials should always be issued with agent_public.
+        """
+        claims   = validate_credential(token, self.issuer_public) or {}
+        agent_pub = (claims.get("cnf") or {}).get("pub", "")
+        if not agent_pub:
+            return False
+        return verify_pop(
+            agent_public=agent_pub,
+            method=request.method,
+            path=request.url.path,
+            ts=request.headers.get("x-ubag-pop-ts", "0"),
+            signature=request.headers.get("x-ubag-pop", ""),
+        )
 
     # ------------------------------------------------------------------
     # Branch B — Authorized agent → JSON-LD
@@ -301,7 +357,7 @@ class UBAGMiddleware(BaseHTTPMiddleware):
             self._http_client = httpx.AsyncClient(
                 follow_redirects=True,
                 timeout=30,
-                verify=False,
+                verify=self.verify_tls,
                 limits=httpx.Limits(max_connections=100, max_keepalive_connections=20),
             )
         return self._http_client
