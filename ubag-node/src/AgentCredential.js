@@ -54,11 +54,24 @@ class AgentCredential {
     this._token = token;
   }
 
-  headers() {
+  /**
+   * Headers for a credentialed request: the credential PLUS a per-request
+   * proof-of-possession (a fresh Ed25519 signature over "METHOD PATH TIMESTAMP").
+   * The gateway checks this against the key bound in the credential's `cnf`
+   * claim, so a stolen credential is useless without this agent's private key.
+   * Pass the actual method and path of the call being made.
+   */
+  headers(method = 'GET', path = '/') {
     if (!this._token) {
       throw new Error('No credential yet — solve a site challenge and call setCredential() first.');
     }
-    return { [CREDENTIAL_HEADER]: this._token };
+    const ts = Math.floor(Date.now() / 1000);
+    const message = `${String(method).toUpperCase()} ${path} ${ts}`;
+    return {
+      [CREDENTIAL_HEADER]: this._token,
+      'X-UBAG-PoP': agentSign(this.privateKey, message),
+      'X-UBAG-PoP-TS': String(ts),
+    };
   }
 }
 
