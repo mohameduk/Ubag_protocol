@@ -4,7 +4,7 @@ const crypto = require('crypto');
 const { fetch } = require('undici');
 const { Branch, resolveBranch } = require('../routing');
 const { CREDENTIAL_HEADER, issueCredential, validateCredential } = require('../credential');
-const { generateChallenge, verifyChallenge } = require('../challenge');
+const { generateChallenge, verifyChallenge, verifyPop } = require('../challenge');
 const { issuerPublicFromPrivate, buildJwks } = require('../keys');
 const { buildAgentsJson } = require('../agentsJson');
 
@@ -18,14 +18,26 @@ function ubag(options = {}) {
     credentialEndpoint = '',
     auditFn = null,
     onVerified = null,
+    requirePop = true,
   } = options;
 
   const issuerPrivate = issuerKey;
   const issuerPublic = issuerPrivate ? issuerPublicFromPrivate(issuerPrivate) : issuerPublicKey;
   // HMAC key for stateless nonce stamping — the server signing to itself.
-  const serverSecret =
-    serverSecretOpt ||
-    crypto.createHash('sha256').update(issuerPrivate || 'ubag-stamp').digest('hex');
+  // SECURITY: never fall back to a world-known constant. If nothing binds this
+  // server's stamp key to a secret, refuse to start rather than let an attacker
+  // forge nonce stamps under sha256("ubag-stamp").
+  let serverSecret;
+  if (serverSecretOpt) {
+    serverSecret = serverSecretOpt;
+  } else if (issuerPrivate) {
+    serverSecret = crypto.createHash('sha256').update(issuerPrivate).digest('hex');
+  } else {
+    throw new Error(
+      'UBAG: no serverSecret and no issuerKey configured. Refusing to start with a ' +
+        'predictable HMAC stamp key. Set UBAG_SERVER_SECRET (or provide issuerKey).'
+    );
+  }
 
   const validateFn = (token) => validateCredential(token, issuerPublic);
 
@@ -63,6 +75,18 @@ function ubag(options = {}) {
 
     if (branch === Branch.AGENT) {
       const claims = validateFn(token);
+      if (requirePop && !popOk(claims, req)) {
+        // Credential is valid but the caller did not prove possession of the
+        // bound agent key → fail closed. Defeats stolen-credential replay.
+        res.setHeader('X-UBAG-Branch', 'B-DENIED');
+        return res.status(401).json({
+          status: 'pop_required',
+          error:
+            "Credential requires proof-of-possession. Sign 'METHOD PATH TIMESTAMP' " +
+            'with your agent Ed25519 key and send X-UBAG-PoP (b64url signature) and ' +
+            'X-UBAG-PoP-TS (unix seconds).',
+        });
+      }
       const host = (req.headers.host || '').split(':')[0];
       const payload = buildJsonLd(host, path, siteMeta, claims || {});
       res.setHeader('X-UBAG-Branch', 'B-AGENT');
@@ -160,6 +184,21 @@ async function proxyToOrigin(req, res, origin) {
   } catch (err) {
     res.status(502).json({ error: 'upstream_error', detail: err.message });
   }
+}
+
+function popOk(claims, req) {
+  // True if the request carries a valid proof-of-possession for the agent key
+  // bound to the credential's `cnf` claim. A credential minted without a bound
+  // key (no cnf.pub) cannot satisfy PoP and is rejected when requirePop is on.
+  const agentPub = claims && claims.cnf && claims.cnf.pub;
+  if (!agentPub) return false;
+  return verifyPop(
+    agentPub,
+    req.method,
+    req.path || req.url,
+    req.headers['x-ubag-pop-ts'] || '0',
+    req.headers['x-ubag-pop'] || ''
+  );
 }
 
 function buildJsonLd(host, path, siteMeta, claims) {

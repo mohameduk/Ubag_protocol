@@ -61,4 +61,19 @@ function verifyChallenge(
   return [true, 'authorized', agentId(agent_public)];
 }
 
-module.exports = { generateChallenge, verifyChallenge, stamp };
+/**
+ * Proof-of-possession for a credentialed request. The agent signs the canonical
+ * string "METHOD PATH TS" with its Ed25519 private key; we verify with the `pub`
+ * from the credential's `cnf` claim. This makes a credential holder-of-key rather
+ * than a bearer token — a stolen credential is useless without the agent key.
+ */
+function verifyPop(agentPublic, method, path, ts, signature, maxAge = 60) {
+  if (!agentPublic || !signature) return false;
+  const t = parseInt(ts, 10);
+  if (!Number.isFinite(t)) return false;
+  if (Math.abs(Math.floor(Date.now() / 1000) - t) > maxAge) return false;
+  const message = `${String(method).toUpperCase()} ${path} ${t}`;
+  return agentVerify(agentPublic, message, signature);
+}
+
+module.exports = { generateChallenge, verifyChallenge, verifyPop, stamp };
