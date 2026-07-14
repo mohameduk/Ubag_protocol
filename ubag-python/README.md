@@ -31,13 +31,17 @@ app.add_middleware(
     UBAGMiddleware,
     origin="https://yoursite.com",
     issuer_key=issuer_private,                  # mints + verifies credentials
-    site_meta={"name": "My Store", "type": "Store", "description": "We sell widgets"},
+    # site_meta is OPTIONAL — Branch B auto-extracts structured data from your
+    # origin's HTML (JSON-LD/OpenGraph/meta). Pass site_meta only to override.
 )
 ```
 
-Your site now serves clean JSON-LD to credentialed agents, proxies humans to your
-origin, challenges unknown bots, exposes `/.well-known/ubag.json` for discovery,
-and serves its issuer key as JWKS at `/.well-known/jwks.json`.
+Your site now serves credentialed agents **auto-extracted** JSON-LD plus a labeled
+Markdown content layer (no hand-written metadata), proxies humans to your origin,
+challenges unknown bots, exposes `/.well-known/ubag.json` for discovery, and
+serves its issuer key as JWKS at `/.well-known/jwks.json`. Credentials are
+holder-of-key: agents attach a per-request proof-of-possession via
+`agent.headers(method, path)`.
 
 A Node/Express SDK with an identical, cross-verifiable wire format is in the same
 repo. Full docs, a runnable demo, and the protocol details:
