@@ -109,3 +109,34 @@ def verify_challenge(
 
     nonce_store.mark_used(nonce)
     return True, "authorized", agent_id(agent_public)
+
+
+def verify_pop(
+    agent_public: str,
+    method: str,
+    path: str,
+    ts: int,
+    signature: str,
+    max_age: int = 60,
+) -> bool:
+    """Proof-of-possession for a credentialed request.
+
+    A credential binds to the agent's identity key via its `cnf` claim, but that
+    binding is meaningless unless the agent proves, per request, that it still
+    holds the key. Here the agent signs the canonical string "METHOD PATH TS"
+    with its Ed25519 private key; we verify with the `pub` from the credential's
+    `cnf`. This turns the credential from a bearer token (usable by anyone who
+    steals it) into a holder-of-key token.
+
+    Returns True only if the timestamp is fresh and the signature verifies.
+    """
+    if not agent_public or not signature:
+        return False
+    try:
+        ts = int(ts)
+    except (TypeError, ValueError):
+        return False
+    if abs(int(time.time()) - ts) > max_age:
+        return False
+    message = f"{method.upper()} {path} {ts}".encode()
+    return agent_verify(agent_public, message, signature)
