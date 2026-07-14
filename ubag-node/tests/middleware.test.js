@@ -8,10 +8,20 @@ const { generateIssuerKeypair, generateAgentKeypair, agentSign } = require('../s
 
 const { privateKey: ISSUER_PRIV } = generateIssuerKeypair();
 
-function makeApp() {
+function popHeaders(cred, apriv, method = 'GET', path = '/hello') {
+  const ts = Math.floor(Date.now() / 1000);
+  const msg = `${method.toUpperCase()} ${path} ${ts}`;
+  return {
+    [CREDENTIAL_HEADER]: cred,
+    'X-UBAG-PoP': agentSign(apriv, msg),
+    'X-UBAG-PoP-TS': String(ts),
+  };
+}
+
+function makeApp(opts = {}) {
   const app = express();
   app.use(express.json());
-  app.use(ubag({ issuerKey: ISSUER_PRIV, siteMeta: { name: 'Test Store', type: 'Store' } }));
+  app.use(ubag({ issuerKey: ISSUER_PRIV, siteMeta: { name: 'Test Store', type: 'Store' }, ...opts }));
   app.get('/hello', (req, res) => res.json({ msg: 'from origin app' }));
   return app;
 }
@@ -30,18 +40,62 @@ test('GET /agents.json still served (legacy alias)', async () => {
   expect(res.body.ubag_version).toBe('1.0');
 });
 
-test('credentialed agent gets JSON-LD (Branch B)', async () => {
-  const token = issueCredential('ubag:test-agent', ISSUER_PRIV);
-  const res = await request(app).get('/hello').set(CREDENTIAL_HEADER, token);
+test('credentialed agent with PoP gets JSON-LD (Branch B)', async () => {
+  const agent = generateAgentKeypair();
+  const token = issueCredential('ubag:test-agent', ISSUER_PRIV, { agentPublic: agent.publicKey });
+  const res = await request(app).get('/hello').set(popHeaders(token, agent.privateKey));
   expect(res.status).toBe(200);
   expect(res.headers['x-ubag-branch']).toBe('B-AGENT');
   expect(res.body['ubag:agent']).toBe('ubag:test-agent');
 });
 
 test('JSON-LD content-type', async () => {
-  const token = issueCredential('ubag:agent', ISSUER_PRIV);
-  const res = await request(app).get('/hello').set(CREDENTIAL_HEADER, token);
+  const agent = generateAgentKeypair();
+  const token = issueCredential('ubag:agent', ISSUER_PRIV, { agentPublic: agent.publicKey });
+  const res = await request(app).get('/hello').set(popHeaders(token, agent.privateKey));
   expect(res.headers['content-type']).toMatch(/application\/ld\+json/);
+});
+
+// ── Proof-of-possession security regression tests ────────────────────────────
+
+test('stolen credential without PoP is rejected (fail closed)', async () => {
+  const agent = generateAgentKeypair();
+  const token = issueCredential('ubag:victim', ISSUER_PRIV, { agentPublic: agent.publicKey });
+  const res = await request(app).get('/hello').set(CREDENTIAL_HEADER, token);
+  expect(res.status).toBe(401);
+  expect(res.body.status).toBe('pop_required');
+});
+
+test('credential with attacker-key PoP is rejected', async () => {
+  const victim = generateAgentKeypair();
+  const attacker = generateAgentKeypair();
+  const token = issueCredential('ubag:victim', ISSUER_PRIV, { agentPublic: victim.publicKey });
+  const res = await request(app).get('/hello').set(popHeaders(token, attacker.privateKey));
+  expect(res.status).toBe(401);
+});
+
+test('stale PoP timestamp is rejected', async () => {
+  const agent = generateAgentKeypair();
+  const token = issueCredential('ubag:test-agent', ISSUER_PRIV, { agentPublic: agent.publicKey });
+  const oldTs = Math.floor(Date.now() / 1000) - 3600;
+  const res = await request(app)
+    .get('/hello')
+    .set(CREDENTIAL_HEADER, token)
+    .set('X-UBAG-PoP', agentSign(agent.privateKey, `GET /hello ${oldTs}`))
+    .set('X-UBAG-PoP-TS', String(oldTs));
+  expect(res.status).toBe(401);
+});
+
+test('requirePop=false allows legacy bearer credential', async () => {
+  const legacy = makeApp({ requirePop: false });
+  const token = issueCredential('ubag:legacy', ISSUER_PRIV);
+  const res = await request(legacy).get('/hello').set(CREDENTIAL_HEADER, token);
+  expect(res.status).toBe(200);
+  expect(res.headers['x-ubag-branch']).toBe('B-AGENT');
+});
+
+test('no serverSecret and no issuerKey refuses to start', () => {
+  expect(() => ubag({})).toThrow();
 });
 
 test('machine UA gets sandbox challenge (Branch C)', async () => {
@@ -69,7 +123,7 @@ test('POST /ubag/verify issues a working credential', async () => {
   });
   expect(res.status).toBe(200);
   expect(res.body.status).toBe('authorized');
-  const res2 = await request(app).get('/hello').set(CREDENTIAL_HEADER, res.body.credential);
+  const res2 = await request(app).get('/hello').set(popHeaders(res.body.credential, agent.privateKey));
   expect(res2.headers['x-ubag-branch']).toBe('B-AGENT');
 });
 

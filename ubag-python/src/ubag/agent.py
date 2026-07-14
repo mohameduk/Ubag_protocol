@@ -16,6 +16,7 @@ Usage:
 """
 from __future__ import annotations
 
+import time
 from typing import Optional
 
 from ubag._credential import CREDENTIAL_HEADER
@@ -78,13 +79,26 @@ class AgentCredential:
         """Store the credential returned by /ubag/verify."""
         self._token = token
 
-    def headers(self) -> dict[str, str]:
-        """Headers to attach to requests once a credential has been obtained."""
+    def headers(self, method: str = "GET", path: str = "/") -> dict[str, str]:
+        """Headers to attach to a request once a credential has been obtained.
+
+        Emits the credential PLUS a per-request proof-of-possession: a fresh
+        Ed25519 signature over "METHOD PATH TIMESTAMP". The gateway checks this
+        against the key bound to the credential's `cnf` claim, so a stolen
+        credential is useless without this agent's private key. Because the PoP
+        is request-scoped, pass the actual method and path of the call.
+        """
         if not self._token:
             raise RuntimeError(
                 "No credential yet — solve a site challenge and call set_credential() first."
             )
-        return {CREDENTIAL_HEADER: self._token}
+        ts = int(time.time())
+        message = f"{method.upper()} {path} {ts}".encode()
+        return {
+            CREDENTIAL_HEADER: self._token,
+            "X-UBAG-PoP": agent_sign(self.private_key, message),
+            "X-UBAG-PoP-TS": str(ts),
+        }
 
     def __repr__(self) -> str:
         return f"AgentCredential(agent_id={self.agent_id!r}, agent_class={self.agent_class!r})"
