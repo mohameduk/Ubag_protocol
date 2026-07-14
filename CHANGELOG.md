@@ -1,5 +1,38 @@
 # Changelog
 
+## Unreleased — Branch B auto structured data
+
+Removes the biggest Branch B adoption barrier: hand-writing `site_meta`. Point
+the gateway at your origin and it serves agents the structured data your site
+already publishes — zero config. Both SDKs (Python + Node) at parity.
+
+### Added
+
+- **Tier 1 auto-extraction (declared → typed JSON-LD).** When an origin is set,
+  Branch B fetches the page and harvests its declared structured data —
+  `<script type="application/ld+json">` (passed through verbatim under
+  `ubag:declared`), OpenGraph, and meta/title/canonical/lang. Everything is
+  owner-authored, so nothing is inferred. Fetched HTML is cached in a bounded
+  LRU+TTL cache. Options: `auto_extract` (default on), `extract_cache_ttl`,
+  `extract_cache_size`.
+- **Markdown content layer (inferred → labeled text).** Readable page content is
+  served as `ubag:content` with `{format: "markdown", source: "extracted"}`,
+  boilerplate stripped, capped at `content_max_chars` (default 20000). UBAG does
+  not guess types for prose — it labels it honestly so agents can tell verified
+  facts from page text. Options: `include_markdown` / `includeMarkdown`
+  (default on), `content_max_chars` / `contentMaxChars`.
+- **`ubag:provenance`** on every Branch B response: `confidence`
+  (`declared` | `extracted` | `mixed`), `sources`, and `fields_from_site_meta` —
+  a machine-readable trust boundary.
+
+### Notes
+
+- Backward compatible: `site_meta` still works and overrides auto-extracted
+  fields. Set `auto_extract=False` for the classic manual behavior.
+- Declared JSON-LD is byte-identical across SDKs (shared golden fixture). Markdown
+  is deterministic per-SDK and semantically equivalent across them, but not
+  promised byte-identical.
+
 ## v0.3.0 — Security hardening
 
 Defense-in-depth hardening of the gateway. Both SDKs (Python + Node) at parity;
