@@ -1,14 +1,41 @@
 'use strict';
 
-const crypto = require('crypto');
 const { fetch } = require('undici');
 const { Branch, resolveBranch } = require('../routing');
-const { CREDENTIAL_HEADER, issueCredential, validateCredential } = require('../credential');
-const { generateChallenge, verifyChallenge, verifyPop } = require('../challenge');
+const {
+  CREDENTIAL_HEADER,
+  DEFAULT_AUDIENCE,
+  DEFAULT_ISSUER,
+  credentialPathAllowed,
+  issueCredential,
+  validateCredential,
+} = require('../credential');
+const { MemoryReplayStore, generateChallenge, verifyChallenge, verifyPop } = require('../challenge');
 const { issuerPublicFromPrivate, buildJwks } = require('../keys');
 const { buildAgentsJson } = require('../agentsJson');
 const { buildJsonldResponse } = require('../sux');
 const { TTLCache } = require('../cache');
+
+class SlidingWindowLimiter {
+  constructor(limit, windowSeconds) {
+    this.limit = limit;
+    this.windowSeconds = windowSeconds;
+    this.events = new Map();
+  }
+
+  allow(key) {
+    if (this.limit <= 0) return true;
+    const now = Date.now() / 1000;
+    const events = (this.events.get(key) || []).filter((value) => value > now - this.windowSeconds);
+    if (events.length >= this.limit) {
+      this.events.set(key, events);
+      return false;
+    }
+    events.push(now);
+    this.events.set(key, events);
+    return true;
+  }
+}
 
 function ubag(options = {}) {
   const {
@@ -20,6 +47,17 @@ function ubag(options = {}) {
     credentialEndpoint = '',
     auditFn = null,
     onVerified = null,
+    authorizeAgent = null,
+    allowSelfRegistration = false,
+    isCredentialRevoked = null,
+    credentialIssuer = DEFAULT_ISSUER,
+    credentialAudience = DEFAULT_AUDIENCE,
+    credentialKid = 'ubag-issuer-1',
+    nonceStore = null,
+    popStore = null,
+    verifyRateLimit = 30,
+    verifyRateWindow = 60,
+    verifyBodyMaxBytes = 16384,
     requirePop = true,
     autoExtract = true,
     extractCacheTtl = 300,
@@ -35,23 +73,34 @@ function ubag(options = {}) {
 
   const issuerPrivate = issuerKey;
   const issuerPublic = issuerPrivate ? issuerPublicFromPrivate(issuerPrivate) : issuerPublicKey;
-  // HMAC key for stateless nonce stamping — the server signing to itself.
-  // SECURITY: never fall back to a world-known constant. If nothing binds this
-  // server's stamp key to a secret, refuse to start rather than let an attacker
-  // forge nonce stamps under sha256("ubag-stamp").
-  let serverSecret;
-  if (serverSecretOpt) {
-    serverSecret = serverSecretOpt;
-  } else if (issuerPrivate) {
-    serverSecret = crypto.createHash('sha256').update(issuerPrivate).digest('hex');
-  } else {
+  // Separate HMAC key for nonce stamping; never derive it from the issuer key.
+  const serverSecret = serverSecretOpt;
+  if (!serverSecret) {
     throw new Error(
-      'UBAG: no serverSecret and no issuerKey configured. Refusing to start with a ' +
-        'predictable HMAC stamp key. Set UBAG_SERVER_SECRET (or provide issuerKey).'
+      'UBAG: serverSecret is required. Set UBAG_SERVER_SECRET or pass a separate strong serverSecret.'
     );
   }
+  if (serverSecret.length < 32) {
+    throw new Error('UBAG: serverSecret must be at least 32 characters.');
+  }
 
-  const validateFn = (token) => validateCredential(token, issuerPublic);
+  const nonceReplayStore = nonceStore || new MemoryReplayStore();
+  const popReplayStore = popStore || new MemoryReplayStore();
+  const verifyLimiter = new SlidingWindowLimiter(verifyRateLimit, verifyRateWindow);
+  const validateFn = (token) => {
+    const claims = validateCredential(token, issuerPublic, {
+      issuer: credentialIssuer,
+      audience: credentialAudience,
+    });
+    if (claims && isCredentialRevoked) {
+      try {
+        if (isCredentialRevoked(claims)) return null;
+      } catch {
+        return null;
+      }
+    }
+    return claims;
+  };
 
   return async function ubagMiddleware(req, res, next) {
     const path = req.path || req.url;
@@ -62,15 +111,28 @@ function ubag(options = {}) {
     }
 
     if (path === '/.well-known/jwks.json') {
-      // Issuer public key, so any site can verify this issuer's credentials
-      // without holding a secret (OAuth/OIDC model).
+      // Issuer public key for sites that explicitly trust this issuer.
       if (!issuerPublic) return res.status(404).json({ error: 'no_issuer_key' });
       res.setHeader('Cache-Control', 'public, max-age=3600');
-      return res.json(buildJwks(issuerPublic));
+      return res.json(buildJwks(issuerPublic, credentialKid));
     }
 
     if (path === '/ubag/verify') {
-      return handleVerify(req, res, { serverSecret, issuerPrivate, issuerPublic, credentialEndpoint, onVerified });
+      return handleVerify(req, res, {
+        serverSecret,
+        issuerPrivate,
+        credentialEndpoint,
+        onVerified,
+        authorizeAgent,
+        allowSelfRegistration,
+        credentialIssuer,
+        credentialAudience,
+        credentialKid,
+        nonceStore: nonceReplayStore,
+        verifyLimiter,
+        verifyBodyMaxBytes,
+        validateFn,
+      });
     }
 
     const ua = req.headers['user-agent'] || '';
@@ -87,16 +149,22 @@ function ubag(options = {}) {
 
     if (branch === Branch.AGENT) {
       const claims = validateFn(token);
-      if (requirePop && !popOk(claims, req)) {
+      if (!credentialPathAllowed(claims, req.path || String(req.url).split('?')[0])) {
+        res.setHeader('X-UBAG-Branch', 'B-DENIED');
+        return res.status(403).json({
+          status: 'path_denied',
+          error: 'Credential does not grant this path.',
+        });
+      }
+      if (requirePop && !popOk(claims, req, token, popReplayStore)) {
         // Credential is valid but the caller did not prove possession of the
         // bound agent key → fail closed. Defeats stolen-credential replay.
         res.setHeader('X-UBAG-Branch', 'B-DENIED');
         return res.status(401).json({
           status: 'pop_required',
           error:
-            "Credential requires proof-of-possession. Sign 'METHOD PATH TIMESTAMP' " +
-            'with your agent Ed25519 key and send X-UBAG-PoP (b64url signature) and ' +
-            'X-UBAG-PoP-TS (unix seconds).',
+            'Credential requires UBAG-POP-V2. Send X-UBAG-PoP, X-UBAG-PoP-TS, ' +
+            'and X-UBAG-PoP-JTI for the exact request target.',
         });
       }
       const host = (req.headers.host || '').split(':')[0];
@@ -128,46 +196,107 @@ function ubag(options = {}) {
 // ------------------------------------------------------------------
 
 async function handleVerify(req, res, ctx) {
-  const { serverSecret, issuerPrivate, issuerPublic, credentialEndpoint, onVerified } = ctx;
+  const {
+    serverSecret,
+    issuerPrivate,
+    credentialEndpoint,
+    onVerified,
+    authorizeAgent,
+    allowSelfRegistration,
+    credentialIssuer,
+    credentialAudience,
+    credentialKid,
+    nonceStore,
+    verifyLimiter,
+    verifyBodyMaxBytes,
+    validateFn,
+  } = ctx;
+  if (!verifyLimiter.allow(req.ip || req.socket.remoteAddress || 'unknown')) {
+    return res.status(429).json({ error: 'rate_limited' });
+  }
+  const contentLength = Number(req.headers['content-length'] || 0);
+  if (!Number.isFinite(contentLength) || contentLength < 0) {
+    return res.status(400).json({ error: 'invalid_content_length' });
+  }
+  if (contentLength > verifyBodyMaxBytes) {
+    return res.status(413).json({ error: 'request_too_large' });
+  }
   let body;
   try {
     body = typeof req.body === 'object' && req.body ? req.body : JSON.parse(req.body);
+    if (!body || Array.isArray(body) || Buffer.byteLength(JSON.stringify(body)) > verifyBodyMaxBytes) {
+      return res.status(413).json({ error: 'request_too_large' });
+    }
   } catch {
     return res.status(400).json({ error: 'invalid_json' });
   }
 
+  const timestamp = Number(body.timestamp);
+  if (!Number.isInteger(timestamp)) {
+    return res.status(400).json({ error: 'invalid_timestamp' });
+  }
+
   const [ok, reason, aid] = verifyChallenge(serverSecret, {
     nonce: body.nonce || '',
-    timestamp: parseInt(body.timestamp || 0, 10),
+    timestamp,
     stamp: body.stamp || '',
     agent_public: body.agent_public || '',
     signature: body.signature || '',
-  });
+  }, { nonceStore });
 
   if (!ok) return res.status(403).json({ status: 'failed', reason });
 
   if (!issuerPrivate) {
     return res.status(200).json({
-      status: 'verified',
+      status: 'identity_verified',
       agent_id: aid,
       credential_endpoint: credentialEndpoint,
       message: 'Identity verified. Obtain a credential from credential_endpoint.',
     });
   }
 
-  const token = issueCredential(aid, issuerPrivate, { agentPublic: body.agent_public });
+  let authorization = null;
+  if (authorizeAgent) {
+    const result = await authorizeAgent({ agentId: aid, agentPublic: body.agent_public }, req);
+    if (result === true) {
+      authorization = { agentClass: 'authorized_agent', allowedPaths: ['/*'] };
+    } else if (result && typeof result === 'object') {
+      authorization = result;
+    }
+  } else if (allowSelfRegistration) {
+    authorization = { agentClass: 'self_asserted_agent', allowedPaths: ['/*'] };
+  }
+
+  if (!authorization) {
+    return res.status(202).json({
+      status: 'identity_verified',
+      agent_id: aid,
+      message: 'Identity verified; site authorization is required before credential issuance.',
+    });
+  }
+
+  const token = issueCredential(aid, issuerPrivate, {
+    agentPublic: body.agent_public,
+    agentClass: authorization.agentClass || 'authorized_agent',
+    allowedPaths: authorization.allowedPaths || ['/*'],
+    issuer: credentialIssuer,
+    audience: credentialAudience,
+    kid: credentialKid,
+  });
 
   if (onVerified) {
     try {
-      onVerified(validateCredential(token, issuerPublic), req);
+      onVerified(validateFn(token), req);
     } catch {}
   }
 
   return res.status(200).json({
-    status: 'authorized',
+    status: 'credential_issued',
     credential: token,
     header: CREDENTIAL_HEADER,
-    instructions: `Include '${CREDENTIAL_HEADER}: ${token}' in all future requests.`,
+    instructions:
+      `Include '${CREDENTIAL_HEADER}: ${token}' plus a v2 request-bound ` +
+      'proof of possession in future requests.',
   });
 }
 
@@ -202,7 +331,7 @@ async function proxyToOrigin(req, res, origin) {
   }
 }
 
-function popOk(claims, req) {
+function popOk(claims, req, token, replayStore) {
   // True if the request carries a valid proof-of-possession for the agent key
   // bound to the credential's `cnf` claim. A credential minted without a bound
   // key (no cnf.pub) cannot satisfy PoP and is rejected when requirePop is on.
@@ -211,9 +340,13 @@ function popOk(claims, req) {
   return verifyPop(
     agentPub,
     req.method,
-    req.path || req.url,
+    String(req.headers.host || '').toLowerCase(),
+    req.originalUrl || req.url,
+    token,
     req.headers['x-ubag-pop-ts'] || '0',
-    req.headers['x-ubag-pop'] || ''
+    req.headers['x-ubag-pop-jti'] || '',
+    req.headers['x-ubag-pop'] || '',
+    { replayStore }
   );
 }
 
