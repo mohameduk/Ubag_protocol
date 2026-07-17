@@ -5,8 +5,8 @@ Most sites already publish structured data for search engines: JSON-LD in
 `<script type="application/ld+json">`, OpenGraph `<meta property="og:*">`, and
 standard `<meta>`/`<title>`/`<link rel=canonical>` tags. All of it is the site
 owner's own declared description of the page. Tier 1 re-serves that to an
-authorized agent — nothing here is inferred or guessed, so everything it emits
-is trustworthy by construction.
+authorized agent — nothing here is inferred or guessed. The result is attributable
+to the publisher, but UBAG does not independently verify that it is factually true.
 
 Pure function: HTML string in, a plain dict out. No network, no side effects,
 stdlib only (`html.parser`), so it is trivially testable and cannot hallucinate

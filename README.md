@@ -19,7 +19,7 @@
 
 When an autonomous agent visits a website, UBAG verifies *who it is* and routes
 accordingly: humans to your normal site, credentialed agents to clean JSON-LD,
-unknown bots to a cryptographic challenge. MCP standardized how agents talk to
+unknown automation to a cryptographic challenge. MCP standardized how agents talk to
 tools — it left a gap at the web layer: agent identity when no human is in the
 loop. This is that layer.
 
@@ -42,10 +42,10 @@ When an autonomous MCP agent visits a website today:
 
 - The website has no way to verify *who* it is
 - It scrapes raw HTML like any bot from 2005
-- Unknown agents get blocked by Cloudflare — including legitimate ones
+- Unknown automated clients are often blocked or served browser-only challenges
 - No human is in the loop to click "Allow"
 
-MCP's OAuth 2.1 spec is built for **human-delegated** auth (browser → redirect → user clicks Allow). It does not cover **autonomous agent identity** — the credential an agent carries when no human is in the loop.
+Many web authorization flows assume a human can complete a browser redirect and consent screen. Autonomous agent identity needs a non-visual proof and an explicit site policy when no human is present.
 
 UBAG fills that gap.
 
@@ -61,7 +61,10 @@ flowchart TD
     M -->|Valid X-UBAG-Credential| B["Branch B — Auto structured data<br/>declared JSON-LD + labeled content"]
     M -->|Looks human| A["Branch A — Transparent proxy<br/>origin server, untouched"]
     M -->|Unknown agent| C["Branch C — Sandbox + challenge<br/>sign a nonce with your Ed25519 key"]
-    C -->|signature verified → credential issued| B
+    C -->|signature verified| I["Identity verified"]
+    I --> P{Site authorization policy}
+    P -->|approved → credential issued| B
+    P -->|not approved| C
 ```
 
 **Branch B is the key insight.** Instead of an agent crawling 50 pages to understand a business, UBAG serves one structured response — products, prices, policies, contacts. One request, no HTML parsing, far fewer extraction errors.
@@ -100,7 +103,7 @@ Two tiers, by **confidence, not depth**:
 1. **Declared → typed JSON-LD.** Parsed from the site's own JSON-LD / OpenGraph / meta and passed through under `ubag:declared`. 100% owner-authored — nothing is inferred, so an agent can act on it.
 2. **Everything else → labeled Markdown.** Readable page content (boilerplate stripped) served as `ubag:content` with `source: "extracted"`. UBAG deliberately does **not** guess types for prose — a regex that calls `$19.99` a "price" is a lie an agent would act on. Instead it hands over honest text, clearly marked as unverified.
 
-That labeling is the point: unlike a generic HTML-to-Markdown reader, UBAG tells the agent **which parts are trustworthy declared facts and which are just page text**. `site_meta` still works — it *overrides* the auto-extracted fields and is the escape hatch for declaring data your page doesn't expose.
+That labeling is the point: unlike a generic HTML-to-Markdown reader, UBAG tells the agent **which parts are site-declared facts and which are extracted page text**. Declared data is attributable to the publisher, not independently guaranteed as true. `site_meta` still works — it *overrides* the auto-extracted fields and is the escape hatch for declaring data your page doesn't expose.
 
 **Options** (all optional): `auto_extract` (default on), `include_markdown` / `includeMarkdown` (default on), `content_max_chars` / `contentMaxChars` (default 20000), and `extract_cache_ttl` / `extract_cache_size` for the bounded HTML cache. Set `auto_extract=False` for the classic manual-`site_meta` behavior.
 
@@ -113,9 +116,10 @@ That labeling is the point: unlike a generic HTML-to-Markdown reader, UBAG tells
 UBAG is **asymmetric — there are no shared secrets in the identity path:**
 
 - **Agent identity = an Ed25519 keypair.** An agent's identity is the SHA-256 thumbprint of its public key (`ubag:…`). To get in, the agent signs the site's nonce with its *private* key; the site verifies with the *public* key. Only the holder of the key can pass — knowing a shared secret never establishes *who* an agent is.
-- **Credentials = ES256 JWTs** signed by an issuer's EC P-256 private key and verifiable by any site with the issuer's *public* key — auto-served as JWKS at `/.well-known/jwks.json`. No site needs a secret to validate a credential — the same model as OAuth / OIDC, which is what lets one credential work across independent sites.
-- **Proof-of-possession ready.** Each credential binds to the agent's key via the `cnf` claim, so a verifier can require the bearer to prove it still holds the matching private key.
-- **One server-side HMAC**, used only so the site can confirm it issued a given nonce **without storing state** (the server signing to *itself*). It is *not* part of the identity proof.
+- **Identity verification is not authorization.** Passing the nonce challenge proves control of a stable key. A site authorizes that identity through an explicit policy callback; self-registration is disabled by default.
+- **Credentials = ES256 JWTs** signed by an issuer's EC P-256 private key and verified by sites that explicitly trust that issuer's public key, expected issuer, and audience. JWKS makes verification possible; it does not create issuer trust automatically.
+- **Proof-of-possession is required by default.** The v2 proof binds method, host, path plus query, credential thumbprint, timestamp, and a one-time identifier that the gateway consumes to reject replay.
+- **A separate server-side HMAC secret** lets a site confirm it issued a nonce without storing every challenge before redemption. Successful redemption is recorded to enforce one-time use. The secret is required and is never derived from the issuer key.
 
 The Python and Node SDKs share identical wire formats (raw Ed25519 + ES256), so a signature or credential produced by one verifies byte-for-byte in the other. This interop is covered by tests in both packages.
 
@@ -149,12 +153,17 @@ from ubag import UBAGMiddleware, generate_issuer_keypair
 # (or run verify-only by passing issuer_public_key alone).
 ISSUER_PRIVATE, ISSUER_PUBLIC = generate_issuer_keypair()   # EC P-256 (ES256)
 
+TRUSTED_AGENTS = {"ubag:replace-with-an-approved-agent-id"}
+def authorize_agent(identity, request):
+    return identity["agent_id"] in TRUSTED_AGENTS
+
 app = FastAPI()
 app.add_middleware(
     UBAGMiddleware,
     origin="https://yoursite.com",   # Branch A proxy target + Branch B auto-extraction source
     issuer_key=ISSUER_PRIVATE,       # mints + verifies agent credentials
     server_secret="a-random-32+char-string-for-nonce-stamping",
+    authorize_agent=authorize_agent, # identity must pass site policy before minting
     # site_meta is now OPTIONAL — Branch B auto-extracts from your origin's HTML.
     # Pass it only to override or supplement the auto-extracted fields:
     # site_meta={"name": "My Store", "type": "Store"},
@@ -162,7 +171,8 @@ app.add_middleware(
 ```
 
 `issuer_key` can also come from the `UBAG_ISSUER_KEY` env var; a verify-only
-deployment can pass `issuer_public_key` (or `UBAG_ISSUER_PUBLIC`) alone.
+deployment can pass `issuer_public_key` (or `UBAG_ISSUER_PUBLIC`) instead. All
+deployments still require a separate `server_secret` for challenge stamping.
 
 Your site now:
 
@@ -179,12 +189,15 @@ const express = require('express');
 const { ubag, generateIssuerKeypair } = require('ubag-web');
 
 const { privateKey: ISSUER_PRIVATE } = generateIssuerKeypair();  // EC P-256 (ES256)
+const TRUSTED_AGENTS = new Set(['ubag:replace-with-an-approved-agent-id']);
 
 const app = express();
+app.use(express.json());
 app.use(ubag({
   origin: 'https://yoursite.com',
   issuerKey: ISSUER_PRIVATE,
   serverSecret: 'a-random-32+char-string-for-nonce-stamping',
+  authorizeAgent: ({ agentId }) => TRUSTED_AGENTS.has(agentId),
   // siteMeta is OPTIONAL — Branch B auto-extracts from your origin's HTML.
   // Pass it only to override or supplement: siteMeta: { name: 'My Store', type: 'Store' },
 }));
@@ -196,7 +209,7 @@ app.use(ubag({
 
 Runnable end-to-end demos spin up a UBAG site in-process and walk one agent
 through the whole handshake — *blocked → challenged → signs the nonce →
-credentialed → served JSON-LD* — then print the JWKS another site would use to
+policy-approved → credentialed → served JSON-LD* — then print the issuer JWKS a trusting site could use to
 verify the credential:
 
 ```bash
@@ -226,13 +239,12 @@ agent = AgentCredential.generate(owner="you@email.com")
 #   agent.set_credential(r.json()["credential"])
 
 # Once credentialed, attach headers per request. Credentials are holder-of-key:
-# headers(method, path) also signs a proof-of-possession over "METHOD PATH TS",
-# so a stolen credential is useless without your agent's private key.
-headers = agent.headers("GET", "/products")
-# {"X-UBAG-Credential": "eyJ...", "X-UBAG-PoP": "…", "X-UBAG-PoP-TS": "…"}
+# The v2 proof binds the credential and full request target and is one-time.
+headers = agent.headers("GET", "https://example.com/products?limit=10")
+# Includes X-UBAG-Credential, X-UBAG-PoP, X-UBAG-PoP-TS and X-UBAG-PoP-JTI.
 ```
 
-Proof-of-possession is required by default (the gateway can disable it with `require_pop=False`). UBAG-enabled sites recognize your agent and serve structured data instead of HTML. Your agent gets better data; the website owner gets visibility and control. The Node SDK exposes the same `AgentCredential` API (`agent.headers(method, path)`).
+Proof-of-possession is required by default. Disabling it with `require_pop=False` / `requirePop: false` is an explicit compatibility downgrade to bearer-token behavior. The Node SDK exposes the equivalent `agent.headers(method, url)` API.
 
 ---
 
@@ -251,12 +263,12 @@ UBAG's identity/routing document collision-free and unambiguous.
   "credential_endpoint": "https://yoursite.com/ubag/verify",
   "branches": {
     "B-AGENT":   { "description": "Authorized MCP agents — clean JSON-LD",
-                   "requires": "X-UBAG-Credential header with valid JWT",
+                   "requires": "Trusted JWT plus v2 proof-of-possession",
                    "content_type": "application/ld+json" },
     "A-HUMAN":   { "description": "Human browsers — transparently proxied to origin",
                    "requires": "None" },
     "C-SANDBOX": { "description": "Unknown agents — Ed25519 nonce challenge",
-                   "requires": "None — solve challenge to get credentialed",
+                   "requires": "Solve challenge to verify identity; site policy controls credential issuance",
                    "challenge_endpoint": "/ubag/verify" }
   },
   "discovery": {
@@ -271,19 +283,17 @@ Like `robots.txt`, but machine-actionable — agents fetch it before making requ
 
 ---
 
-## Why Not Just Use Cloudflare?
+## Relationship to WAFs and bot management
 
-| | Cloudflare | AWS WAF | UBAG |
-|---|---|---|---|
-| Blocks unknown bots | ✅ | ✅ | Challenges them instead |
-| Structured data for agents | Markdown (AI features) | ❌ | ✅ JSON-LD **+** labeled Markdown, with a trust boundary |
-| Auto-extracts your existing structured data | ❌ | ❌ | ✅ zero-config from JSON-LD/OG/meta |
-| Cryptographic agent identity / credential | ❌ | ❌ | ✅ |
-| Autonomous agent support (no browser) | ❌ | ❌ | ✅ |
-| Open source | ❌ | ❌ | ✅ |
-| Vendor lock-in | Cloudflare | AWS | None |
+UBAG is not a replacement for a WAF, DDoS protection, rate limiting, or bot
+management. Those systems protect the network and application perimeter. UBAG
+adds a protocol-level flow for establishing a stable autonomous-agent identity,
+applying a site authorization policy, and serving an agent-oriented response.
 
-Cloudflare and AWS block or filter bots. UBAG **graduates** them: an unknown agent can solve the challenge, get credentialed, and become authorized — no legitimate agent is permanently blocked. *(Competitor columns reflect general capabilities at time of writing; verify against current vendor docs.)*
+An unknown client that solves the nonce challenge becomes **cryptographically
+identified**, not automatically trusted. Credential issuance requires the site's
+authorization policy unless the operator explicitly enables low-trust
+self-registration.
 
 ---
 
@@ -302,15 +312,15 @@ MCP Agent
     └── Visiting websites?  ────────► UBAG credential
 ```
 
-A UBAG credential is issued once and verified in-process by the site's middleware — no redirect, no browser flow — and works on any UBAG-enabled site.
+A UBAG credential is issued without a browser redirect and verified in-process. It can be accepted by another UBAG-enabled site only when that site explicitly trusts the issuer and configures the expected issuer, audience, and public key.
 
 ---
 
 ## Repository Layout
 
 ```
-ubag-python/    Python middleware — FastAPI / Starlette today (v0.3.0)
-ubag-node/      Node middleware — Express today (v0.3.0)
+ubag-python/    Python middleware — FastAPI / Starlette
+ubag-node/      Node middleware — Express
 ```
 
 Both packages implement the full protocol (routing, credentials, challenge, keys,
@@ -339,6 +349,8 @@ cd ubag-node && npm install && npm test
 - [x] Branch C — sandbox + Ed25519 nonce challenge
 - [x] Asymmetric crypto — Ed25519 agent identity + ES256/JWKS credentials, no shared secrets
 - [x] Holder-of-key credentials — per-request proof-of-possession (default on), upstream TLS verification
+- [x] Identity/authorization separation — explicit policy callback; self-registration off by default
+- [x] Enforced credential paths, issuer/audience validation, bounded replay stores, and verification limits
 - [x] `ubag.json` discovery — served on every UBAG site (alias: `/agents.json`)
 - [x] Audit hook — `audit_fn` callback on every request
 - [x] Python SDK (FastAPI/Starlette) + Node SDK (Express), cross-SDK verified
@@ -346,7 +358,7 @@ cd ubag-node && npm install && npm test
 
 **Planned / not yet built**
 - [ ] Django / Flask / Next.js middleware adapters
-- [ ] Hosted credential registry / issuer at `ubagprotocol.com/credential`
+- [ ] Hosted trust registry, revocation service, and issuer federation
 - [ ] WordPress plugin
 - [ ] Docker reference deployment (one-command self-host)
 - [ ] Formal spec docs (`docs/spec/…`)
@@ -356,7 +368,7 @@ cd ubag-node && npm install && npm test
 
 ## Contributing
 
-PRs welcome. The goal isn't to make everyone adopt "UBAG" — it's to make the *mechanism* easy to adopt: `ubag.json` discovery, a sign-the-nonce challenge, and a portable `X-UBAG-Credential` that any site can verify without a shared secret. Open, verifiable, and not owned by any cloud provider. UBAG is just the reference implementation.
+PRs welcome. The goal isn't to make everyone adopt "UBAG" — it's to make the *mechanism* easy to adopt: `ubag.json` discovery, a sign-the-nonce identity challenge, explicit site authorization, and an `X-UBAG-Credential` that trusted issuers and sites can verify without a shared secret. Open, verifiable, and not owned by any cloud provider. UBAG is the reference implementation.
 
 ---
 

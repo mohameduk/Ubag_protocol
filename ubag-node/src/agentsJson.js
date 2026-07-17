@@ -1,8 +1,8 @@
 'use strict';
 
 function buildAgentsJson(host, { credentialEndpoint = '', contact = '' } = {}) {
-  // A self-issuing site mints credentials at its own /ubag/verify, so when no
-  // endpoint is given we advertise that — no hosted central registry required.
+  // A self-issuing site verifies identity and applies its authorization policy
+  // at /ubag/verify when no external credential endpoint is configured.
   credentialEndpoint = credentialEndpoint || `https://${host}/ubag/verify`;
   const doc = {
     ubag_version: '1.0',
@@ -11,7 +11,7 @@ function buildAgentsJson(host, { credentialEndpoint = '', contact = '' } = {}) {
     branches: {
       'B-AGENT': {
         description: 'Authorized MCP agents — receive clean JSON-LD structured data',
-        requires: 'X-UBAG-Credential header with valid JWT',
+        requires: 'Trusted X-UBAG-Credential JWT plus v2 proof-of-possession',
         content_type: 'application/ld+json',
       },
       'A-HUMAN': {
@@ -20,7 +20,7 @@ function buildAgentsJson(host, { credentialEndpoint = '', contact = '' } = {}) {
       },
       'C-SANDBOX': {
         description: 'Unknown agents — Ed25519 nonce-signature challenge',
-        requires: 'None — solve challenge to get credentialed',
+        requires: 'Solve challenge to verify identity; site policy controls credential issuance',
         challenge_endpoint: '/ubag/verify',
       },
     },

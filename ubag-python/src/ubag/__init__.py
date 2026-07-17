@@ -5,7 +5,7 @@ The missing identity layer for MCP agents.
 """
 from ubag._routing import RoutingBranch, resolve_branch
 from ubag._credential import issue_credential, validate_credential, CREDENTIAL_HEADER
-from ubag._challenge import generate_challenge, verify_challenge
+from ubag._challenge import MemoryReplayStore, generate_challenge, verify_challenge
 from ubag._agents_json import build_agents_json
 from ubag._keys import (
     generate_agent_keypair,
@@ -28,6 +28,7 @@ __all__ = [
     "validate_credential",
     "generate_challenge",
     "verify_challenge",
+    "MemoryReplayStore",
     "build_agents_json",
     "CREDENTIAL_HEADER",
     "generate_agent_keypair",
