@@ -1,7 +1,12 @@
 'use strict';
 
 const jwt = require('jsonwebtoken');
-const { CREDENTIAL_HEADER, issueCredential, validateCredential } = require('../src/credential');
+const {
+  CREDENTIAL_HEADER,
+  credentialPathAllowed,
+  issueCredential,
+  validateCredential,
+} = require('../src/credential');
 const { generateChallenge, verifyChallenge } = require('../src/challenge');
 const { generateIssuerKeypair, generateAgentKeypair, agentId } = require('../src/keys');
 const { AgentCredential } = require('../src/AgentCredential');
@@ -12,9 +17,11 @@ test('issue and validate roundtrip', () => {
   const claims = validateCredential(token, publicKey);
   expect(claims).not.toBeNull();
   expect(claims.sub).toBe('ubag:agent1');
-  expect(claims.agent_class).toBe('authorized_agent');
+  expect(claims.agent_class).toBe('self_asserted_agent');
   expect(claims.paths).toContain('/*');
   expect(claims.iss).toBe('https://ubagprotocol.com');
+  expect(claims.aud).toBe('ubag-web');
+  expect(claims.jti).toBeDefined();
 });
 
 test('wrong public key returns null', () => {
@@ -22,6 +29,24 @@ test('wrong public key returns null', () => {
   const other = generateIssuerKeypair();
   const token = issueCredential('a', privateKey);
   expect(validateCredential(token, other.publicKey)).toBeNull();
+});
+
+test('wrong issuer or audience returns null', () => {
+  const { privateKey, publicKey } = generateIssuerKeypair();
+  const token = issueCredential('a', privateKey, {
+    issuer: 'https://issuer.example', audience: 'site-a',
+  });
+  expect(validateCredential(token, publicKey)).toBeNull();
+  expect(validateCredential(token, publicKey, {
+    issuer: 'https://issuer.example', audience: 'site-a',
+  })).not.toBeNull();
+});
+
+test('credential paths are enforced as globs', () => {
+  const claims = { paths: ['/products/*', '/health'] };
+  expect(credentialPathAllowed(claims, '/products/42')).toBe(true);
+  expect(credentialPathAllowed(claims, '/health')).toBe(true);
+  expect(credentialPathAllowed(claims, '/admin')).toBe(false);
 });
 
 test('expired token returns null', () => {
@@ -61,7 +86,7 @@ test('full handshake: agent solves challenge, issuer mints credential', () => {
   expect(aid).toBe(agent.agentId);
   const token = issueCredential(aid, issuer.privateKey, { agentPublic: agent.publicKey });
   agent.setCredential(token);
-  const headers = agent.headers();
+  const headers = agent.headers('GET', '/', { host: 'example.com' });
   expect(headers[CREDENTIAL_HEADER]).toBeDefined();
   expect(validateCredential(headers[CREDENTIAL_HEADER], issuer.publicKey).sub).toBe(agent.agentId);
 });

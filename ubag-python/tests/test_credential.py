@@ -1,7 +1,12 @@
 """Tests for credential issuance/validation (asymmetric ES256) + agent identity."""
 import jwt
 
-from ubag._credential import issue_credential, validate_credential, CREDENTIAL_HEADER
+from ubag._credential import (
+    CREDENTIAL_HEADER,
+    credential_path_allowed,
+    issue_credential,
+    validate_credential,
+)
 from ubag._challenge import generate_challenge, verify_challenge
 from ubag._keys import generate_issuer_keypair, generate_agent_keypair, agent_id
 from ubag.agent import AgentCredential
@@ -13,9 +18,11 @@ def test_issue_and_validate_roundtrip():
     claims = validate_credential(token, pub)
     assert claims is not None
     assert claims["sub"] == "ubag:agent1"
-    assert claims["agent_class"] == "authorized_agent"
+    assert claims["agent_class"] == "self_asserted_agent"
     assert "/*" in claims["paths"]
     assert claims["iss"] == "https://ubagprotocol.com"
+    assert claims["aud"] == "ubag-web"
+    assert claims["jti"]
 
 
 def test_wrong_public_key_returns_none():
@@ -23,6 +30,22 @@ def test_wrong_public_key_returns_none():
     _, other_pub = generate_issuer_keypair()
     token = issue_credential("a", priv)
     assert validate_credential(token, other_pub) is None
+
+
+def test_wrong_issuer_or_audience_returns_none():
+    priv, pub = generate_issuer_keypair()
+    token = issue_credential("a", priv, issuer="https://issuer.example", audience="site-a")
+    assert validate_credential(token, pub) is None
+    assert validate_credential(
+        token, pub, issuer="https://issuer.example", audience="site-a"
+    ) is not None
+
+
+def test_credential_paths_are_enforced_as_globs():
+    claims = {"paths": ["/products/*", "/health"]}
+    assert credential_path_allowed(claims, "/products/42")
+    assert credential_path_allowed(claims, "/health")
+    assert not credential_path_allowed(claims, "/admin")
 
 
 def test_expired_token_returns_none():
@@ -68,6 +91,6 @@ def test_full_handshake_agent_to_credential():
 
     token = issue_credential(aid, ipriv, agent_public=agent.public_key)
     agent.set_credential(token)
-    headers = agent.headers()
+    headers = agent.headers(host="example.com")
     assert CREDENTIAL_HEADER in headers
     assert validate_credential(headers[CREDENTIAL_HEADER], ipub)["sub"] == agent.agent_id

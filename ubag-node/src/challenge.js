@@ -15,7 +15,30 @@ const crypto = require('crypto');
 const { agentVerify, agentId } = require('./keys');
 
 const DEFAULT_TTL = 120;
-const _usedNonces = new Set();
+
+class MemoryReplayStore {
+  constructor(maxEntries = 10000) {
+    if (!Number.isInteger(maxEntries) || maxEntries < 1) throw new Error('maxEntries must be positive');
+    this.maxEntries = maxEntries;
+    this.entries = new Map();
+  }
+
+  consume(identifier, expiresAt) {
+    const now = Math.floor(Date.now() / 1000);
+    for (const [key, expiry] of this.entries) {
+      if (expiry <= now) this.entries.delete(key);
+    }
+    if (this.entries.has(identifier)) return false;
+    this.entries.set(identifier, expiresAt);
+    while (this.entries.size > this.maxEntries) {
+      this.entries.delete(this.entries.keys().next().value);
+    }
+    return true;
+  }
+}
+
+const defaultNonceStore = new MemoryReplayStore();
+const defaultPopStore = new MemoryReplayStore();
 
 function stamp(serverSecret, nonce, ts) {
   return crypto.createHmac('sha256', serverSecret).update(`${nonce}:${ts}`).digest('hex');
@@ -41,39 +64,70 @@ function verifyChallenge(
   { nonce, timestamp, stamp: stampIn, agent_public, signature },
   { ttl = DEFAULT_TTL, nonceStore = null } = {}
 ) {
-  const store =
-    nonceStore || { exists: (id) => _usedNonces.has(id), markUsed: (id) => _usedNonces.add(id) };
+  const store = nonceStore || defaultNonceStore;
 
   if (!nonce || !agent_public || !signature) return [false, 'missing_fields', null];
-  if (store.exists(nonce)) return [false, 'nonce_already_used', null];
 
   const expected = stamp(serverSecret, nonce, timestamp);
   const a = Buffer.from(expected);
   const b = Buffer.from(String(stampIn));
   if (a.length !== b.length || !crypto.timingSafeEqual(a, b)) return [false, 'invalid_stamp', null];
 
-  if (Math.floor(Date.now() / 1000) - timestamp > ttl) return [false, 'nonce_expired', null];
+  const now = Math.floor(Date.now() / 1000);
+  const age = now - timestamp;
+  if (age > ttl) return [false, 'nonce_expired', null];
+  if (age < -5) return [false, 'nonce_from_future', null];
 
   // The identity proof: only the holder of the matching private key can produce this.
   if (!agentVerify(agent_public, nonce, signature)) return [false, 'bad_signature', null];
 
-  store.markUsed(nonce);
-  return [true, 'authorized', agentId(agent_public)];
+  if (!store.consume(nonce, timestamp + ttl)) return [false, 'nonce_already_used', null];
+  return [true, 'identity_verified', agentId(agent_public)];
+}
+
+function buildPopMessage(method, host, target, token, ts, jti) {
+  const tokenHash = crypto.createHash('sha256').update(String(token)).digest('hex');
+  return [
+    'UBAG-POP-V2',
+    String(method).toUpperCase(),
+    String(host).toLowerCase(),
+    String(target),
+    tokenHash,
+    String(ts),
+    String(jti),
+  ].join('\n');
 }
 
 /**
- * Proof-of-possession for a credentialed request. The agent signs the canonical
- * string "METHOD PATH TS" with its Ed25519 private key; we verify with the `pub`
- * from the credential's `cnf` claim. This makes a credential holder-of-key rather
- * than a bearer token — a stolen credential is useless without the agent key.
+ * V2 proof-of-possession for a credentialed request. The proof binds method,
+ * host, path+query, credential thumbprint, timestamp, and a one-time identifier.
  */
-function verifyPop(agentPublic, method, path, ts, signature, maxAge = 60) {
-  if (!agentPublic || !signature) return false;
+function verifyPop(
+  agentPublic,
+  method,
+  host,
+  target,
+  token,
+  ts,
+  jti,
+  signature,
+  { maxAge = 60, replayStore = defaultPopStore } = {}
+) {
+  if (!agentPublic || !host || !target || !token || !jti || !signature) return false;
   const t = parseInt(ts, 10);
   if (!Number.isFinite(t)) return false;
-  if (Math.abs(Math.floor(Date.now() / 1000) - t) > maxAge) return false;
-  const message = `${String(method).toUpperCase()} ${path} ${t}`;
-  return agentVerify(agentPublic, message, signature);
+  const now = Math.floor(Date.now() / 1000);
+  if (Math.abs(now - t) > maxAge) return false;
+  const message = buildPopMessage(method, host, target, token, t, jti);
+  if (!agentVerify(agentPublic, message, signature)) return false;
+  return replayStore.consume(`pop:${jti}`, now + maxAge);
 }
 
-module.exports = { generateChallenge, verifyChallenge, verifyPop, stamp };
+module.exports = {
+  MemoryReplayStore,
+  generateChallenge,
+  verifyChallenge,
+  buildPopMessage,
+  verifyPop,
+  stamp,
+};

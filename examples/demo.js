@@ -8,7 +8,7 @@
  * Starts a UBAG-protected Express site on an ephemeral port and walks one
  * autonomous agent through the entire handshake:
  *
- *     blocked  ->  challenged  ->  signs the nonce  ->  credentialed  ->  JSON-LD
+ *     challenged -> identity verified -> policy approves -> credentialed -> JSON-LD
  *
  * Then shows the JWKS any other site would use to verify this issuer's credentials.
  */
@@ -22,11 +22,14 @@ const { fetch } = req('undici');
 const { ubag, AgentCredential, generateIssuerKeypair } = req('./src');
 
 const { privateKey: ISSUER_PRIVATE } = generateIssuerKeypair();
+const agent = AgentCredential.generate({ owner: 'demo@agent.dev' });
 
 const app = express();
 app.use(express.json());
 app.use(ubag({
   issuerKey: ISSUER_PRIVATE,
+  serverSecret: 'demo-only-separate-server-secret',
+  authorizeAgent: ({ agentId }) => agentId === agent.agentId,
   siteMeta: { name: 'Acme Widgets', type: 'Store', description: 'We sell premium widgets' },
 }));
 app.get('/', (req, res) => res.type('html').send('<h1>Acme Widgets</h1><p>We sell premium widgets.</p>'));
@@ -51,13 +54,12 @@ const step = (t) => console.log('\n' + '='.repeat(66) + '\n' + t + '\n' + '='.re
 
     // 2 — agent signs the nonce with its Ed25519 private key
     step('2. Agent signs the nonce with its Ed25519 private key');
-    const agent = AgentCredential.generate({ owner: 'demo@agent.dev' });
     console.log('agent id:', agent.agentId);
     const solution = agent.solveChallenge(challenge);
     console.log('signature:', solution.signature.slice(0, 24), '...');
 
     // 3 — post the solution, issuer mints a credential
-    step('3. POST /ubag/verify  ->  issuer mints a credential');
+    step('3. POST /ubag/verify  ->  identity verified, policy approves, credential issued');
     r = await fetch(`${base}/ubag/verify`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
@@ -69,15 +71,15 @@ const step = (t) => console.log('\n' + '='.repeat(66) + '\n' + t + '\n' + '='.re
 
     // 4 — re-request WITH the credential, get clean JSON-LD
     step('4. Agent requests /  WITH credential  ->  Branch B (JSON-LD)');
-    r = await fetch(`${base}/`, { headers: { ...AGENT_UA, ...agent.headers() } });
+    r = await fetch(`${base}/`, { headers: { ...AGENT_UA, ...agent.headers('GET', `${base}/`) } });
     console.log('status:', r.status, '| branch:', r.headers.get('x-ubag-branch'));
     console.log(await r.json());
 
     // 5 — any other site verifies this issuer's credentials via JWKS, no shared secret
-    step('5. /.well-known/jwks.json  ->  public key for cross-site verification');
+    step('5. /.well-known/jwks.json  ->  public key for sites that trust this issuer');
     console.log(await (await fetch(`${base}/.well-known/jwks.json`)).json());
 
-    console.log('\nDone: blocked -> challenged -> signed -> credentialed -> JSON-LD.\n');
+    console.log('\nDone: challenged -> identity verified -> policy approved -> credentialed -> JSON-LD.\n');
   } finally {
     server.close();
   }

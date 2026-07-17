@@ -18,29 +18,49 @@ from __future__ import annotations
 import hashlib
 import hmac
 import secrets
+import threading
 import time
+from collections import OrderedDict
 from typing import Optional, Protocol
 
 from ubag._keys import agent_id, agent_verify
 
 
-class UBAGNonceStore(Protocol):
-    def exists(self, nonce: str) -> bool: ...
-    def mark_used(self, nonce: str) -> None: ...
+class UBAGReplayStore(Protocol):
+    def consume(self, identifier: str, expires_at: int) -> bool: ...
 
 
-class _MemoryNonceStore:
-    def __init__(self) -> None:
-        self._used: set[str] = set()
+class MemoryReplayStore:
+    """Bounded, thread-safe TTL replay store for one process."""
 
-    def exists(self, nonce: str) -> bool:
-        return nonce in self._used
+    def __init__(self, max_entries: int = 10_000) -> None:
+        if max_entries < 1:
+            raise ValueError("max_entries must be positive")
+        self.max_entries = max_entries
+        self._entries: OrderedDict[str, int] = OrderedDict()
+        self._lock = threading.Lock()
 
-    def mark_used(self, nonce: str) -> None:
-        self._used.add(nonce)
+    def consume(self, identifier: str, expires_at: int) -> bool:
+        now = int(time.time())
+        with self._lock:
+            expired = [key for key, expiry in self._entries.items() if expiry <= now]
+            for key in expired:
+                self._entries.pop(key, None)
+            if identifier in self._entries:
+                return False
+            self._entries[identifier] = expires_at
+            self._entries.move_to_end(identifier)
+            while len(self._entries) > self.max_entries:
+                self._entries.popitem(last=False)
+            return True
 
 
-_default_store = _MemoryNonceStore()
+class _MemoryNonceStore(MemoryReplayStore):
+    """Backward-compatible internal name."""
+
+
+_default_nonce_store = MemoryReplayStore()
+_default_pop_store = MemoryReplayStore()
 
 
 def _stamp(server_secret: str, nonce: str, ts: int) -> str:
@@ -80,63 +100,84 @@ def verify_challenge(
     agent_public: str,
     signature: str,
     ttl: int = 120,
-    store: Optional[UBAGNonceStore] = None,
+    store: Optional[UBAGReplayStore] = None,
 ) -> tuple[bool, str, Optional[str]]:
     """Verify a challenge response. Returns (ok, reason, agent_id).
 
-    1. Replay   — nonce not already used
-    2. Stamp    — the server issued this exact (nonce, ts), untampered
-    3. Expiry   — within TTL
-    4. Identity — agent's signature over the nonce verifies under agent_public
+    1. Stamp    — the server issued this exact (nonce, ts), untampered
+    2. Expiry   — the timestamp is current and within TTL
+    3. Identity — the signature verifies under agent_public
+    4. Replay   — the nonce is atomically consumed after verification
     """
-    nonce_store = store or _default_store
+    nonce_store = store or _default_nonce_store
 
     if not nonce or not agent_public or not signature:
         return False, "missing_fields", None
 
-    if nonce_store.exists(nonce):
-        return False, "nonce_already_used", None
-
     if not hmac.compare_digest(_stamp(server_secret, nonce, timestamp), stamp):
         return False, "invalid_stamp", None
 
-    if int(time.time()) - timestamp > ttl:
+    now = int(time.time())
+    age = now - timestamp
+    if age > ttl:
         return False, "nonce_expired", None
+    if age < -5:
+        return False, "nonce_from_future", None
 
     # The identity proof: only the holder of the matching private key can produce this.
     if not agent_verify(agent_public, nonce.encode(), signature):
         return False, "bad_signature", None
 
-    nonce_store.mark_used(nonce)
-    return True, "authorized", agent_id(agent_public)
+    if not nonce_store.consume(nonce, timestamp + ttl):
+        return False, "nonce_already_used", None
+    return True, "identity_verified", agent_id(agent_public)
+
+
+def build_pop_message(
+    method: str,
+    host: str,
+    target: str,
+    token: str,
+    ts: int,
+    jti: str,
+) -> bytes:
+    """Build the v2 request-bound proof-of-possession message."""
+    token_hash = hashlib.sha256(token.encode()).hexdigest()
+    return (
+        "UBAG-POP-V2\n"
+        f"{method.upper()}\n{host.lower()}\n{target}\n{token_hash}\n{int(ts)}\n{jti}"
+    ).encode()
 
 
 def verify_pop(
     agent_public: str,
     method: str,
-    path: str,
+    host: str,
+    target: str,
+    token: str,
     ts: int,
+    jti: str,
     signature: str,
     max_age: int = 60,
+    store: Optional[UBAGReplayStore] = None,
 ) -> bool:
-    """Proof-of-possession for a credentialed request.
+    """Verify a request-bound, one-time proof of possession.
 
-    A credential binds to the agent's identity key via its `cnf` claim, but that
-    binding is meaningless unless the agent proves, per request, that it still
-    holds the key. Here the agent signs the canonical string "METHOD PATH TS"
-    with its Ed25519 private key; we verify with the `pub` from the credential's
-    `cnf`. This turns the credential from a bearer token (usable by anyone who
-    steals it) into a holder-of-key token.
-
-    Returns True only if the timestamp is fresh and the signature verifies.
+    The proof covers method, host, path plus query, the credential thumbprint,
+    timestamp, and a unique proof identifier. The identifier is atomically
+    consumed after signature verification to reject within-window replay.
     """
-    if not agent_public or not signature:
+    if not agent_public or not host or not target or not token or not jti or not signature:
         return False
     try:
         ts = int(ts)
     except (TypeError, ValueError):
         return False
-    if abs(int(time.time()) - ts) > max_age:
+    now = int(time.time())
+    if abs(now - ts) > max_age:
         return False
-    message = f"{method.upper()} {path} {ts}".encode()
-    return agent_verify(agent_public, message, signature)
+    message = build_pop_message(method, host, target, token, ts, jti)
+    if not agent_verify(agent_public, message, signature):
+        return False
+    replay_store = store or _default_pop_store
+    return replay_store.consume(f"pop:{jti}", now + max_age)

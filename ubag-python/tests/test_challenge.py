@@ -19,7 +19,7 @@ def test_valid_challenge_accepted():
         SERVER_SECRET, ch["nonce"], ch["timestamp"], ch["stamp"], pub, _solve(ch, priv), store=store
     )
     assert ok is True
-    assert reason == "authorized"
+    assert reason == "identity_verified"
     assert aid == agent_id(pub)
 
 

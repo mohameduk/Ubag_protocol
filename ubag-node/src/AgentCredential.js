@@ -6,6 +6,8 @@
  * the nonce, then carries the credential the site/issuer returns.
  */
 const { CREDENTIAL_HEADER } = require('./credential');
+const crypto = require('crypto');
+const { buildPopMessage } = require('./challenge');
 const { generateAgentKeypair, agentSign, agentId } = require('./keys');
 
 class AgentCredential {
@@ -56,21 +58,29 @@ class AgentCredential {
 
   /**
    * Headers for a credentialed request: the credential PLUS a per-request
-   * proof-of-possession (a fresh Ed25519 signature over "METHOD PATH TIMESTAMP").
-   * The gateway checks this against the key bound in the credential's `cnf`
-   * claim, so a stolen credential is useless without this agent's private key.
-   * Pass the actual method and path of the call being made.
+   * v2 proof-of-possession bound to method, host, path+query, credential,
+   * timestamp, and a one-time identifier. Pass an absolute URL or supply host.
    */
-  headers(method = 'GET', path = '/') {
+  headers(method = 'GET', path = '/', { host = '' } = {}) {
     if (!this._token) {
       throw new Error('No credential yet — solve a site challenge and call setCredential() first.');
     }
+    let target = path;
+    try {
+      const parsed = new URL(path);
+      host = parsed.host;
+      target = `${parsed.pathname}${parsed.search}`;
+    } catch {}
+    if (!host) throw new Error('host is required when path is not an absolute URL');
     const ts = Math.floor(Date.now() / 1000);
-    const message = `${String(method).toUpperCase()} ${path} ${ts}`;
+    const jti = crypto.randomBytes(16).toString('base64url');
+    const message = buildPopMessage(method, host, target, this._token, ts, jti);
     return {
       [CREDENTIAL_HEADER]: this._token,
       'X-UBAG-PoP': agentSign(this.privateKey, message),
       'X-UBAG-PoP-TS': String(ts),
+      'X-UBAG-PoP-JTI': jti,
+      'X-UBAG-PoP-Version': '2',
     };
   }
 }

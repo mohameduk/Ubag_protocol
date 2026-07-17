@@ -21,10 +21,9 @@ def build_agents_json(
     MCP agents should fetch this before making requests to understand
     what credentials are required and what data is available.
 
-    `credential_endpoint` is where an agent obtains a credential. A self-issuing
-    site (one configured with an issuer key) mints credentials at its own
-    `/ubag/verify`, so when no endpoint is given we advertise that — no hosted
-    central registry is required.
+    `credential_endpoint` is where an agent proves identity and, when approved
+    by site policy, obtains a credential. A self-issuing site handles this at
+    `/ubag/verify` when no external endpoint is configured.
     """
     credential_endpoint = credential_endpoint or f"https://{host}/ubag/verify"
     doc = {
@@ -34,7 +33,7 @@ def build_agents_json(
         "branches": {
             "B-AGENT": {
                 "description": "Authorized MCP agents — receive clean JSON-LD structured data",
-                "requires": "X-UBAG-Credential header with valid JWT",
+                "requires": "Trusted X-UBAG-Credential JWT plus v2 proof-of-possession",
                 "content_type": "application/ld+json",
             },
             "A-HUMAN": {
@@ -43,7 +42,7 @@ def build_agents_json(
             },
             "C-SANDBOX": {
                 "description": "Unknown agents — Ed25519 nonce-signature challenge",
-                "requires": "None — solve challenge to get credentialed",
+                "requires": "Solve challenge to verify identity; site policy controls credential issuance",
                 "challenge_endpoint": "/ubag/verify",
             },
         },

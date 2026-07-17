@@ -52,7 +52,13 @@ class _FakeClient:
 def _mw(**kw):
     async def app(scope, receive, send):  # minimal ASGI app; unused by these tests
         pass
-    return UBAGMiddleware(app, origin="https://acme.com", issuer_key=ISSUER_PRIV, **kw)
+    return UBAGMiddleware(
+        app,
+        origin="https://acme.com",
+        issuer_key=ISSUER_PRIV,
+        server_secret="test-server-secret-separate-from-issuer",
+        **kw,
+    )
 
 
 def test_origin_html_fetches_and_caches():
