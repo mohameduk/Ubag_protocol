@@ -6,7 +6,7 @@ const { generateAgentKeypair, agentSign, agentId } = require('../src/keys');
 const SERVER_SECRET = 'server-stamp-secret';
 const makeStore = () => {
   const used = new Set();
-  return { exists: (id) => used.has(id), markUsed: (id) => used.add(id) };
+  return { consume: (id) => used.has(id) ? false : (used.add(id), true) };
 };
 const solve = (ch, priv) => agentSign(priv, ch.nonce);
 
@@ -19,7 +19,7 @@ test('valid challenge accepted', () => {
     agent_public: publicKey, signature: solve(ch, privateKey),
   }, { nonceStore: store });
   expect(ok).toBe(true);
-  expect(reason).toBe('authorized');
+  expect(reason).toBe('identity_verified');
   expect(aid).toBe(agentId(publicKey));
 });
 

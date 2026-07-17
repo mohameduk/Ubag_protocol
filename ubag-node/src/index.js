@@ -4,7 +4,7 @@ const { ubag }                                    = require('./middleware/expres
 const { AgentCredential }                         = require('./AgentCredential');
 const { Branch, resolveBranch }                   = require('./routing');
 const { CREDENTIAL_HEADER, issueCredential, validateCredential } = require('./credential');
-const { generateChallenge, verifyChallenge }      = require('./challenge');
+const { MemoryReplayStore, generateChallenge, verifyChallenge } = require('./challenge');
 const { buildAgentsJson }                         = require('./agentsJson');
 const {
   generateAgentKeypair,
@@ -24,6 +24,7 @@ module.exports = {
   CREDENTIAL_HEADER,
   issueCredential,
   validateCredential,
+  MemoryReplayStore,
   generateChallenge,
   verifyChallenge,
   buildAgentsJson,

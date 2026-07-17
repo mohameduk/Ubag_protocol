@@ -12,13 +12,16 @@ Usage:
     # ... on a 429 challenge from a site:
     solution = agent.solve_challenge(challenge)                 # POST to /ubag/verify
     agent.set_credential(resp["credential"])                   # store what you get back
-    headers = agent.headers()                                   # attach to future requests
+    headers = agent.headers("GET", "https://example.com/path") # attach to that request
 """
 from __future__ import annotations
 
+import secrets
 import time
 from typing import Optional
+from urllib.parse import urlsplit
 
+from ubag._challenge import build_pop_message
 from ubag._credential import CREDENTIAL_HEADER
 from ubag._keys import agent_id, agent_sign, generate_agent_keypair
 
@@ -79,25 +82,36 @@ class AgentCredential:
         """Store the credential returned by /ubag/verify."""
         self._token = token
 
-    def headers(self, method: str = "GET", path: str = "/") -> dict[str, str]:
+    def headers(self, method: str = "GET", path: str = "/", host: str = "") -> dict[str, str]:
         """Headers to attach to a request once a credential has been obtained.
 
-        Emits the credential PLUS a per-request proof-of-possession: a fresh
-        Ed25519 signature over "METHOD PATH TIMESTAMP". The gateway checks this
-        against the key bound to the credential's `cnf` claim, so a stolen
-        credential is useless without this agent's private key. Because the PoP
-        is request-scoped, pass the actual method and path of the call.
+        Pass either an absolute URL as `path`, or the request path plus `host`.
+        The v2 proof binds the method, host, path+query, credential thumbprint,
+        timestamp, and a one-time identifier.
         """
         if not self._token:
             raise RuntimeError(
                 "No credential yet — solve a site challenge and call set_credential() first."
             )
+        parsed = urlsplit(path)
+        if parsed.scheme and parsed.netloc:
+            host = parsed.netloc
+            target = parsed.path or "/"
+            if parsed.query:
+                target += f"?{parsed.query}"
+        else:
+            target = path
+        if not host:
+            raise ValueError("host is required when path is not an absolute URL")
         ts = int(time.time())
-        message = f"{method.upper()} {path} {ts}".encode()
+        jti = secrets.token_urlsafe(16)
+        message = build_pop_message(method, host, target, self._token, ts, jti)
         return {
             CREDENTIAL_HEADER: self._token,
             "X-UBAG-PoP": agent_sign(self.private_key, message),
             "X-UBAG-PoP-TS": str(ts),
+            "X-UBAG-PoP-JTI": jti,
+            "X-UBAG-PoP-Version": "2",
         }
 
     def __repr__(self) -> str:

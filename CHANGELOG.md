@@ -1,5 +1,46 @@
 # Changelog
 
+## v0.5.0 — Security-model alignment
+
+Separates cryptographic identity verification from site authorization and brings
+the public documentation into line with the hardened implementation. This is a
+pre-1.0 security release with intentional API and wire-format changes.
+
+### Security
+
+- A solved Ed25519 challenge now returns `identity_verified`; credential issuance
+  requires `authorize_agent` / `authorizeAgent` by default. Operators may
+  explicitly enable low-trust self-registration, which issues a
+  `self_asserted_agent` credential.
+- Replaces timestamp-only request proofs with `UBAG-POP-V2`, binding the method,
+  host, path plus query, credential thumbprint, timestamp, and a one-time proof ID.
+- Adds bounded TTL replay stores with atomic `consume` semantics for challenge
+  nonces and request proofs.
+- Enforces credential `paths` grants before Branch B access.
+- Adds and validates JWT `aud` and `jti` claims, enforces expected `iss`, and
+  exposes a credential-revocation callback.
+- Requires a separate nonce-stamping server secret; issuer-key-derived fallback
+  behavior has been removed.
+- Adds process-local verification rate limiting and request-body size limits.
+
+### Documentation
+
+- Corrects stale statements in `SECURITY.md` about optional proof-of-possession
+  and deterministic fallback secrets.
+- Clarifies that key possession is identity rather than reputation or trust,
+  JWKS availability is not issuer trust, and site-declared metadata is
+  attributable rather than independently verified.
+- Removes unsourced competitor capability claims and describes UBAG as
+  complementary to WAF and bot-management infrastructure.
+
+### Migration
+
+- Configure `server_secret` / `serverSecret` separately from the issuer key.
+- Add an authorization callback, or explicitly opt into self-registration for
+  low-trust/demo deployments.
+- Agents must generate v2 proofs with `AgentCredential.headers(method, absolute_url)`.
+- Credential validators must use the configured issuer and audience values.
+
 ## v0.4.0 — Branch B auto structured data
 
 Removes the biggest Branch B adoption barrier: hand-writing `site_meta`. Point

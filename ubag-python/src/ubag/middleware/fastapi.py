@@ -6,12 +6,15 @@ Usage:
     from ubag import UBAGMiddleware, generate_issuer_keypair
 
     issuer_private, _ = generate_issuer_keypair()   # EC P-256 (ES256)
+    TRUSTED_AGENTS = {"ubag:replace-with-an-approved-agent-id"}
 
     app = FastAPI()
     app.add_middleware(
         UBAGMiddleware,
         origin="https://yoursite.com",
         issuer_key=issuer_private,                  # mints + verifies credentials
+        server_secret="a-separate-strong-secret",
+        authorize_agent=lambda identity, request: identity["agent_id"] in TRUSTED_AGENTS,
         site_meta={
             "name": "My Store",
             "type": "Store",
@@ -21,9 +24,12 @@ Usage:
 """
 from __future__ import annotations
 
-import hashlib
+import inspect
 import json
 import os
+import threading
+import time
+from collections import defaultdict, deque
 from typing import Any, Callable, Optional
 
 import httpx
@@ -32,12 +38,40 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse, Response
 
 from ubag._agents_json import build_agents_json
-from ubag._challenge import generate_challenge, verify_challenge, verify_pop
+from ubag._challenge import MemoryReplayStore, generate_challenge, verify_challenge, verify_pop
 from ubag._cache import TTLCache
-from ubag._credential import CREDENTIAL_HEADER, issue_credential, validate_credential
+from ubag._credential import (
+    CREDENTIAL_HEADER,
+    DEFAULT_AUDIENCE,
+    DEFAULT_ISSUER,
+    credential_path_allowed,
+    issue_credential,
+    validate_credential,
+)
 from ubag._keys import build_jwks, issuer_public_from_private
 from ubag._routing import RoutingBranch, resolve_branch
 from ubag._sux import build_jsonld_response
+
+
+class _SlidingWindowLimiter:
+    def __init__(self, limit: int, window: int) -> None:
+        self.limit = limit
+        self.window = window
+        self._events: dict[str, deque[float]] = defaultdict(deque)
+        self._lock = threading.Lock()
+
+    def allow(self, key: str) -> bool:
+        if self.limit <= 0:
+            return True
+        now = time.monotonic()
+        with self._lock:
+            events = self._events[key]
+            while events and events[0] <= now - self.window:
+                events.popleft()
+            if len(events) >= self.limit:
+                return False
+            events.append(now)
+            return True
 
 
 class UBAGMiddleware(BaseHTTPMiddleware):
@@ -48,8 +82,7 @@ class UBAGMiddleware(BaseHTTPMiddleware):
         app:                  The ASGI application to wrap.
         origin:               The upstream origin URL (Branch A proxy target).
                               e.g. "https://yoursite.com" or "https://192.168.1.1"
-        secret_key:           HMAC/JWT secret. Must match credentials issued to agents.
-                              Defaults to UBAG_SECRET_KEY env var.
+        server_secret:        Separate HMAC secret used to stamp nonce challenges.
         site_meta:            Schema.org metadata served to Branch B agents.
                               Keys map directly to JSON-LD fields.
         credential_endpoint:  URL where agents obtain credentials.
@@ -68,6 +101,17 @@ class UBAGMiddleware(BaseHTTPMiddleware):
         credential_endpoint: str = "",
         audit_fn: Optional[Callable] = None,
         on_verified: Optional[Callable] = None,
+        authorize_agent: Optional[Callable] = None,
+        allow_self_registration: bool = False,
+        is_credential_revoked: Optional[Callable] = None,
+        credential_issuer: str = DEFAULT_ISSUER,
+        credential_audience: str = DEFAULT_AUDIENCE,
+        credential_kid: str = "ubag-issuer-1",
+        nonce_store: Any = None,
+        pop_store: Any = None,
+        verify_rate_limit: int = 30,
+        verify_rate_window: int = 60,
+        verify_body_max_bytes: int = 16_384,
         verify_tls: bool = True,
         require_pop: bool = True,
         auto_extract: bool = True,
@@ -86,25 +130,29 @@ class UBAGMiddleware(BaseHTTPMiddleware):
             self.issuer_public = issuer_public_from_private(self.issuer_private)
         else:
             self.issuer_public = issuer_public_key or os.getenv("UBAG_ISSUER_PUBLIC", "")
-        # HMAC key for stateless nonce stamping — the server signing to itself.
-        # SECURITY: never fall back to a world-known constant. If nothing binds
-        # this server's stamp key to a secret, refuse to start rather than let an
-        # attacker forge nonce stamps under sha256("ubag-stamp").
-        explicit_secret = server_secret or os.getenv("UBAG_SERVER_SECRET")
-        if explicit_secret:
-            self.server_secret = explicit_secret
-        elif self.issuer_private:
-            self.server_secret = hashlib.sha256(self.issuer_private.encode()).hexdigest()
-        else:
+        # Separate HMAC key for nonce stamping; never derive it from the issuer key.
+        self.server_secret = server_secret or os.getenv("UBAG_SERVER_SECRET", "")
+        if not self.server_secret:
             raise ValueError(
-                "UBAG: no server_secret and no issuer_key configured. Refusing to "
-                "start with a predictable HMAC stamp key. Set UBAG_SERVER_SECRET "
-                "(or provide issuer_key)."
+                "UBAG: server_secret is required. Set UBAG_SERVER_SECRET or pass "
+                "a separate strong server_secret."
             )
+        if len(self.server_secret) < 32:
+            raise ValueError("UBAG: server_secret must be at least 32 characters.")
         self.site_meta           = site_meta or {}
         self.credential_endpoint = credential_endpoint
         self.audit_fn            = audit_fn
         self.on_verified         = on_verified
+        self.authorize_agent     = authorize_agent
+        self.allow_self_registration = allow_self_registration
+        self.is_credential_revoked = is_credential_revoked
+        self.credential_issuer   = credential_issuer
+        self.credential_audience = credential_audience
+        self.credential_kid      = credential_kid
+        self.nonce_store         = nonce_store or MemoryReplayStore()
+        self.pop_store           = pop_store or MemoryReplayStore()
+        self.verify_body_max_bytes = verify_body_max_bytes
+        self._verify_limiter     = _SlidingWindowLimiter(verify_rate_limit, verify_rate_window)
         # SECURITY: verify upstream TLS certs by default. Only disable for
         # explicitly trusted local/dev origins.
         self.verify_tls          = verify_tls
@@ -150,11 +198,18 @@ class UBAGMiddleware(BaseHTTPMiddleware):
             user_agent=ua,
             accept=accept,
             credential_token=cred_token,
-            validate_fn=lambda t: validate_credential(t, self.issuer_public),
+            validate_fn=self._validate_token,
         )
 
         if branch == RoutingBranch.AGENT:
-            if self.require_pop and not self._pop_ok(request, cred_token):
+            claims = self._validate_token(cred_token) or {}
+            if not credential_path_allowed(claims, request.url.path):
+                response = JSONResponse(
+                    status_code=403,
+                    content={"status": "path_denied", "error": "Credential does not grant this path."},
+                    headers={"X-UBAG-Branch": "B-DENIED"},
+                )
+            elif self.require_pop and not self._pop_ok(request, cred_token, claims):
                 # Credential is valid but the caller did not prove possession of
                 # the bound agent key → fail closed. Defeats stolen-credential replay.
                 response = JSONResponse(
@@ -162,9 +217,8 @@ class UBAGMiddleware(BaseHTTPMiddleware):
                     content={
                         "status": "pop_required",
                         "error": (
-                            "Credential requires proof-of-possession. Sign "
-                            "'METHOD PATH TIMESTAMP' with your agent Ed25519 key and send "
-                            "X-UBAG-PoP (b64url signature) and X-UBAG-PoP-TS (unix seconds)."
+                            "Credential requires UBAG-POP-V2. Send X-UBAG-PoP, "
+                            "X-UBAG-PoP-TS, and X-UBAG-PoP-JTI for the exact request target."
                         ),
                     },
                     headers={"X-UBAG-Branch": "B-DENIED"},
@@ -187,26 +241,50 @@ class UBAGMiddleware(BaseHTTPMiddleware):
 
         return response
 
+    def _validate_token(self, token: str) -> dict | None:
+        if not token or not self.issuer_public:
+            return None
+        claims = validate_credential(
+            token,
+            self.issuer_public,
+            issuer=self.credential_issuer,
+            audience=self.credential_audience,
+        )
+        if claims and self.is_credential_revoked:
+            try:
+                if self.is_credential_revoked(claims):
+                    return None
+            except Exception:
+                return None
+        return claims
+
     # ------------------------------------------------------------------
     # Proof-of-possession gate for credentialed requests
     # ------------------------------------------------------------------
 
-    def _pop_ok(self, request: Request, token: str) -> bool:
+    def _pop_ok(self, request: Request, token: str, claims: dict) -> bool:
         """True if the request carries a valid proof-of-possession for the agent
         key bound to the credential's `cnf` claim. A credential minted without a
         bound key (no `cnf.pub`) cannot satisfy PoP and is rejected when
         require_pop is on — credentials should always be issued with agent_public.
         """
-        claims   = validate_credential(token, self.issuer_public) or {}
         agent_pub = (claims.get("cnf") or {}).get("pub", "")
         if not agent_pub:
             return False
+        target = request.url.path
+        if request.url.query:
+            target += f"?{request.url.query}"
+        host = request.headers.get("host", "").lower()
         return verify_pop(
             agent_public=agent_pub,
             method=request.method,
-            path=request.url.path,
+            host=host,
+            target=target,
+            token=token,
             ts=request.headers.get("x-ubag-pop-ts", "0"),
+            jti=request.headers.get("x-ubag-pop-jti", ""),
             signature=request.headers.get("x-ubag-pop", ""),
+            store=self.pop_store,
         )
 
     # ------------------------------------------------------------------
@@ -214,7 +292,7 @@ class UBAGMiddleware(BaseHTTPMiddleware):
     # ------------------------------------------------------------------
 
     async def _branch_b(self, request: Request, token: str) -> JSONResponse:
-        claims  = validate_credential(token, self.issuer_public)
+        claims  = self._validate_token(token)
         host    = request.headers.get("host", "").split(":")[0]
         html    = await self._origin_html(request.url.path)
         payload = build_jsonld_response(
@@ -314,20 +392,39 @@ class UBAGMiddleware(BaseHTTPMiddleware):
     # ------------------------------------------------------------------
 
     async def _handle_verify(self, request: Request) -> JSONResponse:
-        from ubag._challenge import verify_challenge
+        client_key = request.client.host if request.client else "unknown"
+        if not self._verify_limiter.allow(client_key):
+            return JSONResponse(status_code=429, content={"error": "rate_limited"})
+        content_length = request.headers.get("content-length")
+        if content_length:
+            try:
+                if int(content_length) > self.verify_body_max_bytes:
+                    return JSONResponse(status_code=413, content={"error": "request_too_large"})
+            except ValueError:
+                return JSONResponse(status_code=400, content={"error": "invalid_content_length"})
+        try:
+            raw_body = await request.body()
+            if len(raw_body) > self.verify_body_max_bytes:
+                return JSONResponse(status_code=413, content={"error": "request_too_large"})
+            body = json.loads(raw_body)
+            if not isinstance(body, dict):
+                raise ValueError
+        except (ValueError, TypeError, json.JSONDecodeError):
+            return JSONResponse(status_code=400, content={"error": "invalid_json"})
 
         try:
-            body = await request.json()
-        except Exception:
-            return JSONResponse(status_code=400, content={"error": "invalid_json"})
+            timestamp = int(body.get("timestamp", 0))
+        except (TypeError, ValueError):
+            return JSONResponse(status_code=400, content={"error": "invalid_timestamp"})
 
         ok, reason, aid = verify_challenge(
             server_secret=self.server_secret,
             nonce=body.get("nonce", ""),
-            timestamp=int(body.get("timestamp", 0)),
+            timestamp=timestamp,
             stamp=body.get("stamp", ""),
             agent_public=body.get("agent_public", ""),
             signature=body.get("signature", ""),
+            store=self.nonce_store,
         )
 
         if not ok:
@@ -337,21 +434,48 @@ class UBAGMiddleware(BaseHTTPMiddleware):
             # Identity proven, but this site doesn't mint credentials itself —
             # point the agent at the central issuer.
             return JSONResponse(status_code=200, content={
-                "status": "verified",
+                "status": "identity_verified",
                 "agent_id": aid,
                 "credential_endpoint": self.credential_endpoint,
                 "message": "Identity verified. Obtain a credential from credential_endpoint.",
+            })
+
+        authorization: dict[str, Any] | None = None
+        if self.authorize_agent:
+            result = self.authorize_agent(
+                {"agent_id": aid, "agent_public": body.get("agent_public", "")},
+                request,
+            )
+            if inspect.isawaitable(result):
+                result = await result
+            if result is True:
+                authorization = {"agent_class": "authorized_agent", "allowed_paths": ["/*"]}
+            elif isinstance(result, dict):
+                authorization = result
+        elif self.allow_self_registration:
+            authorization = {"agent_class": "self_asserted_agent", "allowed_paths": ["/*"]}
+
+        if authorization is None:
+            return JSONResponse(status_code=202, content={
+                "status": "identity_verified",
+                "agent_id": aid,
+                "message": "Identity verified; site authorization is required before credential issuance.",
             })
 
         token = issue_credential(
             subject=aid,
             issuer_private_pem=self.issuer_private,
             agent_public=body.get("agent_public", ""),
+            agent_class=authorization.get("agent_class", "authorized_agent"),
+            allowed_paths=authorization.get("allowed_paths", ["/*"]),
+            issuer=self.credential_issuer,
+            audience=self.credential_audience,
+            kid=self.credential_kid,
         )
 
         if self.on_verified:
             try:
-                claims = validate_credential(token, self.issuer_public)
+                claims = self._validate_token(token)
                 self.on_verified(claims, request)
             except Exception:
                 pass
@@ -359,10 +483,13 @@ class UBAGMiddleware(BaseHTTPMiddleware):
         return JSONResponse(
             status_code=200,
             content={
-                "status": "authorized",
+                "status": "credential_issued",
                 "credential": token,
                 "header": CREDENTIAL_HEADER,
-                "instructions": f"Include '{CREDENTIAL_HEADER}: {token}' in all future requests.",
+                "instructions": (
+                    f"Include '{CREDENTIAL_HEADER}: {token}' plus a v2 request-bound "
+                    "proof of possession in future requests."
+                ),
             },
         )
 
@@ -379,15 +506,15 @@ class UBAGMiddleware(BaseHTTPMiddleware):
         return JSONResponse(content=doc, headers={"X-UBAG-Branch": "META"})
 
     # ------------------------------------------------------------------
-    # /.well-known/jwks.json — issuer public key, so any site can verify
-    # this issuer's credentials without holding a secret (OAuth/OIDC model)
+    # /.well-known/jwks.json — issuer public key for sites that explicitly
+    # trust this issuer (OAuth/JWKS model)
     # ------------------------------------------------------------------
 
     def _jwks_response(self) -> JSONResponse:
         if not self.issuer_public:
             return JSONResponse(status_code=404, content={"error": "no_issuer_key"})
         return JSONResponse(
-            content=build_jwks(self.issuer_public),
+            content=build_jwks(self.issuer_public, kid=self.credential_kid),
             headers={"X-UBAG-Branch": "META", "Cache-Control": "public, max-age=3600"},
         )
 

@@ -1,27 +1,40 @@
 'use strict';
 
 const express = require('express');
+const crypto = require('crypto');
 const request = require('supertest');
 const { ubag } = require('../src/middleware/express');
 const { CREDENTIAL_HEADER, issueCredential } = require('../src/credential');
+const { buildPopMessage } = require('../src/challenge');
 const { generateIssuerKeypair, generateAgentKeypair, agentSign } = require('../src/keys');
 
 const { privateKey: ISSUER_PRIV } = generateIssuerKeypair();
 
-function popHeaders(cred, apriv, method = 'GET', path = '/hello') {
-  const ts = Math.floor(Date.now() / 1000);
-  const msg = `${method.toUpperCase()} ${path} ${ts}`;
+function popHeaders(cred, apriv, method = 'GET', path = '/hello', options = {}) {
+  const host = options.host || 'testserver';
+  const ts = options.ts || Math.floor(Date.now() / 1000);
+  const jti = options.jti || crypto.randomBytes(16).toString('base64url');
+  const msg = buildPopMessage(method, host, path, cred, ts, jti);
   return {
     [CREDENTIAL_HEADER]: cred,
+    Host: host,
     'X-UBAG-PoP': agentSign(apriv, msg),
     'X-UBAG-PoP-TS': String(ts),
+    'X-UBAG-PoP-JTI': jti,
+    'X-UBAG-PoP-Version': '2',
   };
 }
 
 function makeApp(opts = {}) {
   const app = express();
   app.use(express.json());
-  app.use(ubag({ issuerKey: ISSUER_PRIV, siteMeta: { name: 'Test Store', type: 'Store' }, ...opts }));
+  app.use(ubag({
+    issuerKey: ISSUER_PRIV,
+    serverSecret: 'test-server-secret-separate-from-issuer',
+    allowSelfRegistration: true,
+    siteMeta: { name: 'Test Store', type: 'Store' },
+    ...opts,
+  }));
   app.get('/hello', (req, res) => res.json({ msg: 'from origin app' }));
   return app;
 }
@@ -77,12 +90,9 @@ test('credential with attacker-key PoP is rejected', async () => {
 test('stale PoP timestamp is rejected', async () => {
   const agent = generateAgentKeypair();
   const token = issueCredential('ubag:test-agent', ISSUER_PRIV, { agentPublic: agent.publicKey });
-  const oldTs = Math.floor(Date.now() / 1000) - 3600;
-  const res = await request(app)
-    .get('/hello')
-    .set(CREDENTIAL_HEADER, token)
-    .set('X-UBAG-PoP', agentSign(agent.privateKey, `GET /hello ${oldTs}`))
-    .set('X-UBAG-PoP-TS', String(oldTs));
+  const res = await request(app).get('/hello').set(popHeaders(
+    token, agent.privateKey, 'GET', '/hello', { ts: Math.floor(Date.now() / 1000) - 3600 }
+  ));
   expect(res.status).toBe(401);
 });
 
@@ -95,7 +105,11 @@ test('requirePop=false allows legacy bearer credential', async () => {
 });
 
 test('no serverSecret and no issuerKey refuses to start', () => {
-  expect(() => ubag({})).toThrow();
+  expect(() => ubag({ issuerKey: ISSUER_PRIV })).toThrow();
+});
+
+test('short serverSecret refuses to start', () => {
+  expect(() => ubag({ issuerKey: ISSUER_PRIV, serverSecret: 'too-short' })).toThrow();
 });
 
 test('machine UA gets sandbox challenge (Branch C)', async () => {
@@ -122,7 +136,7 @@ test('POST /ubag/verify issues a working credential', async () => {
     agent_public: agent.publicKey, signature: agentSign(agent.privateKey, ch.nonce),
   });
   expect(res.status).toBe(200);
-  expect(res.body.status).toBe('authorized');
+  expect(res.body.status).toBe('credential_issued');
   const res2 = await request(app).get('/hello').set(popHeaders(res.body.credential, agent.privateKey));
   expect(res2.headers['x-ubag-branch']).toBe('B-AGENT');
 });
@@ -150,4 +164,74 @@ test('replay rejected', async () => {
   const res = await request(app).post('/ubag/verify').send(payload);
   expect(res.status).toBe(403);
   expect(res.body.reason).toBe('nonce_already_used');
+});
+
+test('identity is not authorization by default', async () => {
+  const guarded = makeApp({ allowSelfRegistration: false });
+  const agent = generateAgentKeypair();
+  const ch = (await request(guarded).get('/hello').set('user-agent', 'curl/8.5').set('accept', '*/*')).body.ubag_challenge;
+  const res = await request(guarded).post('/ubag/verify').send({
+    nonce: ch.nonce, timestamp: ch.timestamp, stamp: ch.stamp,
+    agent_public: agent.publicKey, signature: agentSign(agent.privateKey, ch.nonce),
+  });
+  expect(res.status).toBe(202);
+  expect(res.body.status).toBe('identity_verified');
+  expect(res.body.credential).toBeUndefined();
+});
+
+test('authorization callback can restrict credential paths', async () => {
+  const authorized = makeApp({
+    allowSelfRegistration: false,
+    authorizeAgent: () => ({ agentClass: 'authorized_agent', allowedPaths: ['/allowed'] }),
+  });
+  const agent = generateAgentKeypair();
+  const ch = (await request(authorized).get('/hello').set('user-agent', 'curl/8.5').set('accept', '*/*')).body.ubag_challenge;
+  const issued = await request(authorized).post('/ubag/verify').send({
+    nonce: ch.nonce, timestamp: ch.timestamp, stamp: ch.stamp,
+    agent_public: agent.publicKey, signature: agentSign(agent.privateKey, ch.nonce),
+  });
+  const denied = await request(authorized).get('/hello').set(popHeaders(issued.body.credential, agent.privateKey));
+  expect(denied.status).toBe(403);
+  expect(denied.body.status).toBe('path_denied');
+});
+
+test('PoP replay is rejected inside freshness window', async () => {
+  const agent = generateAgentKeypair();
+  const token = issueCredential('ubag:test-agent', ISSUER_PRIV, { agentPublic: agent.publicKey });
+  const headers = popHeaders(token, agent.privateKey);
+  expect((await request(app).get('/hello').set(headers)).status).toBe(200);
+  expect((await request(app).get('/hello').set(headers)).status).toBe(401);
+});
+
+test('PoP is bound to host and query', async () => {
+  const agent = generateAgentKeypair();
+  const token = issueCredential('ubag:test-agent', ISSUER_PRIV, { agentPublic: agent.publicKey });
+  const headers = popHeaders(token, agent.privateKey, 'GET', '/hello?view=one');
+  expect((await request(app).get('/hello?view=two').set(headers)).status).toBe(401);
+  expect((await request(app).get('/hello?view=one').set(headers)).status).toBe(200);
+
+  const wrongHost = popHeaders(token, agent.privateKey, 'GET', '/hello', { host: 'other.example' });
+  expect((await request(app).get('/hello').set(wrongHost).set('Host', 'testserver')).status).toBe(401);
+});
+
+test('revocation callback prevents Branch B access', async () => {
+  const revoked = makeApp({ isCredentialRevoked: () => true });
+  const agent = generateAgentKeypair();
+  const token = issueCredential('ubag:revoked', ISSUER_PRIV, { agentPublic: agent.publicKey });
+  const res = await request(revoked)
+    .get('/hello')
+    .set(popHeaders(token, agent.privateKey))
+    .set('user-agent', 'node-fetch')
+    .set('accept', '*/*');
+  expect(res.status).toBe(429);
+  expect(res.headers['x-ubag-branch']).toBe('C-SANDBOX');
+});
+
+test('verify endpoint applies rate and body-size limits', async () => {
+  const limited = makeApp({ verifyRateLimit: 1, verifyBodyMaxBytes: 32 });
+  await request(limited).post('/ubag/verify').send({});
+  expect((await request(limited).post('/ubag/verify').send({})).status).toBe(429);
+
+  const sized = makeApp({ verifyRateLimit: 0, verifyBodyMaxBytes: 8 });
+  expect((await request(sized).post('/ubag/verify').send({ too: 'large' })).status).toBe(413);
 });
