@@ -7,9 +7,15 @@ that requires deployment-specific review and hardening.
 
 ## Reporting a vulnerability
 
-Report security issues **privately** rather than opening a public issue. Email
-`medhmida1990@gmail.com` with the subject `UBAG SECURITY`. We aim to acknowledge
-reports within a few days and appreciate coordinated disclosure.
+We welcome public security discussion. General questions, design concerns, and
+non-sensitive findings may be opened as GitHub issues.
+
+If a report includes working exploit details or could put users at immediate risk,
+please email `mohamed@dixitalgorizmi.com` with the subject `UBAG SECURITY` before
+publishing those details. This is to protect users while we investigate and prepare
+a fix, not to prevent public disclosure. Coordinated disclosure and a public
+write-up after remediation are welcome. We aim to acknowledge reports within a few
+days.
 
 ## Security properties
 
