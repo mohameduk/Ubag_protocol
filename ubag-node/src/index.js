@@ -4,7 +4,12 @@ const { ubag }                                    = require('./middleware/expres
 const { AgentCredential }                         = require('./AgentCredential');
 const { Branch, resolveBranch }                   = require('./routing');
 const { CREDENTIAL_HEADER, issueCredential, validateCredential } = require('./credential');
-const { MemoryReplayStore, generateChallenge, verifyChallenge } = require('./challenge');
+const {
+  MemoryReplayStore,
+  ReplayStoreCapacityError,
+  generateChallenge,
+  verifyChallenge,
+} = require('./challenge');
 const { buildAgentsJson }                         = require('./agentsJson');
 const {
   generateAgentKeypair,
@@ -15,6 +20,12 @@ const {
   issuerPublicFromPrivate,
   buildJwks,
 }                                                 = require('./keys');
+const {
+  ProvenanceError,
+  parseProvenance,
+  createProvenance,
+  verifyProvenance,
+}                                                 = require('./provenance');
 
 module.exports = {
   ubag,
@@ -25,6 +36,7 @@ module.exports = {
   issueCredential,
   validateCredential,
   MemoryReplayStore,
+  ReplayStoreCapacityError,
   generateChallenge,
   verifyChallenge,
   buildAgentsJson,
@@ -35,4 +47,8 @@ module.exports = {
   generateIssuerKeypair,
   issuerPublicFromPrivate,
   buildJwks,
+  ProvenanceError,
+  parseProvenance,
+  createProvenance,
+  verifyProvenance,
 };

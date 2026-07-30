@@ -1,0 +1,39 @@
+{
+  "profile": "UBAG Provenance Profile 1.0 draft",
+  "notes": "Executable deterministic vectors are generated from the fixed key in both SDK test suites. Every negative case mutates exactly one rule.",
+  "fixed": {
+    "private_key": "nWGxne_9WmC6hEr0kuwsxERJxWl7MmkZcDusAxyuf2A",
+    "public_key": "11qYAYKxCrfVS_7TyWQHOg7hcvPapiMlrwIaaPcHURo",
+    "method": "POST",
+    "public_origin": "https://service.example",
+    "origin_form": "/payments?b=2&a=1",
+    "body_utf8": "{\"amount\":10}",
+    "jti": "vector-valid-001",
+    "issued_at": 2000000000,
+    "lifetime": 60,
+    "compact_jws": "eyJhbGciOiJFZERTQSIsImp3ayI6eyJjcnYiOiJFZDI1NTE5Iiwia3R5IjoiT0tQIiwieCI6IjExcVlBWUt4Q3JmVlNfN1R5V1FIT2c3aGN2UGFwaU1scndJYWFQY0hVUm8ifSwidHlwIjoidWJhZy1wcm92ZW5hbmNlK2p3dCJ9.eyJleHAiOjIwMDAwMDAwNjAsImh0bSI6IlBPU1QiLCJodHUiOiJodHRwczovL3NlcnZpY2UuZXhhbXBsZS9wYXltZW50cyIsImlhdCI6MjAwMDAwMDAwMCwianRpIjoidmVjdG9yLXZhbGlkLTAwMSIsInViYWdfY29udGVudF9kaWdlc3QiOiJzaGEtMjU2PTpxTGlMZ3Y2UW9XQkk2NGhSL2pna0JUbGMwNVhhK3FmS20ra093QStDcHlzPToiLCJ1YmFnX3FzaCI6IldvZy1PNklrd1k5djhNWDUyVElDajl2Z291SHJSYXg5QXg2TXBxY0hPYTgifQ.LnMe-N7Xu-9J0OB68lwN60s4Gu3lEsW2GRNXTkRb1A4kKmTWwiAo6G4hdj9Vy2JXzRsNYioqoS8GWhRIBg7lDw"
+  },
+  "cases": [
+    {"name": "valid-credentialless-get", "rule": "UBAG-PROV-VALID-001", "expected": "VERIFIED"},
+    {"name": "valid-credentialed-post", "rule": "UBAG-PROV-VALID-002", "expected": "VERIFIED"},
+    {"name": "reject-wrong-typ", "rule": "UBAG-PROV-HEADER-001", "expected": "UNSUPPORTED_PROFILE"},
+    {"name": "reject-key-substitution-kid", "rule": "UBAG-PROV-KEY-002", "expected": "KEY_HINT_MISMATCH"},
+    {"name": "reject-method-change", "rule": "UBAG-PROV-REQUEST-001", "expected": "METHOD_MISMATCH"},
+    {"name": "reject-query-reorder", "rule": "UBAG-PROV-TARGET-001", "expected": "TARGET_MISMATCH"},
+    {"name": "reject-body-change", "rule": "UBAG-PROV-CONTENT-001", "expected": "CONTENT_DIGEST_MISMATCH"},
+    {"name": "reject-credential-added", "rule": "UBAG-PROV-CREDENTIAL-001", "expected": "CREDENTIAL_MISMATCH"},
+    {"name": "reject-reused-jti", "rule": "UBAG-PROV-REPLAY-002", "expected": "PROVENANCE_REPLAYED"},
+    {"name": "reject-live-store-capacity", "rule": "UBAG-PROV-REPLAY-004", "expected": "REPLAY_STORE_EXHAUSTED"},
+    {"name": "reject-key-live-entry-quota", "rule": "UBAG-PROV-REPLAY-005", "expected": "REPLAY_KEY_QUOTA_EXCEEDED"},
+    {"name": "reject-origin-live-entry-quota", "rule": "UBAG-PROV-REPLAY-006", "expected": "REPLAY_ORIGIN_QUOTA_EXCEEDED"},
+    {"name": "reject-oversized-jti", "rule": "UBAG-PROV-REPLAY-003", "expected": "INVALID_CLAIMS"},
+    {"name": "reject-credential-without-validator", "rule": "UBAG-PROV-CONFIG-001", "expected": "VERIFIER_MISCONFIGURED"},
+    {"name": "reject-duplicate-protected-header", "rule": "UBAG-PROV-JSON-001", "expected": "MALFORMED_ENVELOPE"},
+    {"name": "reject-floating-timestamp", "rule": "UBAG-PROV-JSON-002", "expected": "MALFORMED_ENVELOPE"},
+    {"name": "reject-unsafe-integer", "rule": "UBAG-PROV-JSON-003", "expected": "MALFORMED_ENVELOPE"},
+    {"name": "reject-multifault-tenant-noncanonical", "rule": "UBAG-PROV-ORDER-001", "expected": "MALFORMED_ENVELOPE"},
+    {"name": "reject-multifault-header-noncanonical", "rule": "UBAG-PROV-ORDER-002", "expected": "MALFORMED_ENVELOPE"},
+    {"name": "reject-tenant-wire-claim", "rule": "UBAG-PROV-BOUNDARY-001", "expected": "INVALID_CLAIMS"},
+    {"name": "reject-principal-wire-claim", "rule": "UBAG-PROV-BOUNDARY-002", "expected": "INVALID_CLAIMS"}
+  ]
+}

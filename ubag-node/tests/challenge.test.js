@@ -79,3 +79,17 @@ test('missing fields rejected', () => {
   expect(ok).toBe(false);
   expect(reason).toBe('missing_fields');
 });
+
+test('replay store capacity never evicts live entries', () => {
+  const { MemoryReplayStore, ReplayStoreCapacityError } = require('../src/challenge');
+  const store = new MemoryReplayStore(10);
+  const future = Math.floor(Date.now() / 1000) + 3600;
+  for (let index = 0; index < 10; index += 1) {
+    expect(store.consume(`id-${index}`, future + index)).toBe(true);
+  }
+  expect(() => store.consume('capacity-attack', future + 100))
+    .toThrow(ReplayStoreCapacityError);
+  expect(store.entries.size).toBe(10);
+  expect(store.capacityExhaustions).toBe(1);
+  expect(store.consume('id-0', future)).toBe(false);
+});
