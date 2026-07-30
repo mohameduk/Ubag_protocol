@@ -60,7 +60,8 @@ test('credential binds agent key (cnf)', () => {
   const agent = generateAgentKeypair();
   const token = issueCredential(agentId(agent.publicKey), issuer.privateKey, { agentPublic: agent.publicKey });
   const claims = validateCredential(token, issuer.publicKey);
-  expect(claims.cnf.jkt).toBe(agentId(agent.publicKey));
+  const { jwkThumbprint } = require('../src/provenance');
+  expect(claims.cnf.jkt).toBe(jwkThumbprint(agent.publicKey));
   expect(claims.cnf.pub).toBe(agent.publicKey);
 });
 

@@ -5,7 +5,12 @@ The missing identity layer for MCP agents.
 """
 from ubag._routing import RoutingBranch, resolve_branch
 from ubag._credential import issue_credential, validate_credential, CREDENTIAL_HEADER
-from ubag._challenge import MemoryReplayStore, generate_challenge, verify_challenge
+from ubag._challenge import (
+    MemoryReplayStore,
+    ReplayStoreCapacityError,
+    generate_challenge,
+    verify_challenge,
+)
 from ubag._agents_json import build_agents_json
 from ubag._keys import (
     generate_agent_keypair,
@@ -17,8 +22,16 @@ from ubag._keys import (
     build_jwks,
 )
 from ubag.agent import AgentCredential
+from ubag.provenance import (
+    ProvenanceEnvelope,
+    ProvenanceError,
+    VerifiedProvenance,
+    create_provenance,
+    parse_provenance,
+    verify_provenance,
+)
 
-__version__ = "0.4.0"
+__version__ = "0.5.0"
 __all__ = [
     "UBAGMiddleware",
     "AgentCredential",
@@ -29,6 +42,7 @@ __all__ = [
     "generate_challenge",
     "verify_challenge",
     "MemoryReplayStore",
+    "ReplayStoreCapacityError",
     "build_agents_json",
     "CREDENTIAL_HEADER",
     "generate_agent_keypair",
@@ -38,6 +52,12 @@ __all__ = [
     "agent_sign",
     "agent_verify",
     "build_jwks",
+    "ProvenanceEnvelope",
+    "VerifiedProvenance",
+    "ProvenanceError",
+    "create_provenance",
+    "parse_provenance",
+    "verify_provenance",
 ]
 
 # Lazy import so FastAPI/Starlette is optional
