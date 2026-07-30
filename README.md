@@ -123,6 +123,15 @@ UBAG is **asymmetric — there are no shared secrets in the identity path:**
 
 The Python and Node SDKs share identical wire formats (raw Ed25519 + ES256), so a signature or credential produced by one verifies byte-for-byte in the other. This interop is covered by tests in both packages.
 
+### Transaction-bound provenance profile
+
+The draft [`ubag-provenance+jwt` profile](docs/spec/README.md) extends the
+read-oriented challenge flow with a short-lived, single-use signed envelope
+bound to the public method, origin, exact origin-form request target, presented
+credential, and RFC 9530 Content-Digest. The public verifier produces
+`VerifiedProvenance`; tenant and principal resolution deliberately remain
+server-side and are never accepted as wire claims.
+
 ---
 
 ## Install

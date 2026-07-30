@@ -59,7 +59,8 @@ def test_credential_binds_agent_key():
     _, apub = generate_agent_keypair()
     token = issue_credential(agent_id(apub), ipriv, agent_public=apub)
     claims = validate_credential(token, ipub)
-    assert claims["cnf"]["jkt"] == agent_id(apub)
+    from ubag.provenance import jwk_thumbprint
+    assert claims["cnf"]["jkt"] == jwk_thumbprint(apub)
     assert claims["cnf"]["pub"] == apub
 
 

@@ -51,8 +51,10 @@ def issue_credential(
         "paths": allowed_paths or ["/*"],
     }
     if agent_public:
-        # Bind the credential to the agent's identity key (key thumbprint).
-        payload["cnf"] = {"jkt": agent_id(agent_public), "pub": agent_public}
+        # RFC 7638 thumbprint binding for UBAG Provenance / DPoP-shaped proofs.
+        # ``pub`` remains for the existing request-PoP verifier.
+        from ubag.provenance import jwk_thumbprint
+        payload["cnf"] = {"jkt": jwk_thumbprint(agent_public), "pub": agent_public}
     return jwt.encode(payload, issuer_private_pem, algorithm=_ALG, headers={"kid": kid})
 
 
