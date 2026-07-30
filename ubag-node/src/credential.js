@@ -9,7 +9,7 @@
  */
 const jwt = require('jsonwebtoken');
 const crypto = require('crypto');
-const { agentId } = require('./keys');
+const { jwkThumbprint } = require('./provenance');
 
 const CREDENTIAL_HEADER = 'X-UBAG-Credential';
 const DEFAULT_TTL = 300;
@@ -38,7 +38,7 @@ function issueCredential(
     agent_class: agentClass,
     paths: allowedPaths,
   };
-  if (agentPublic) payload.cnf = { jkt: agentId(agentPublic), pub: agentPublic };
+  if (agentPublic) payload.cnf = { jkt: jwkThumbprint(agentPublic), pub: agentPublic };
   return jwt.sign(payload, issuerPrivatePem, { algorithm: ALG, expiresIn: ttl, keyid: kid });
 }
 

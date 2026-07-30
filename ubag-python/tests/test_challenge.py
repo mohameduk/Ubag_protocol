@@ -1,7 +1,15 @@
 """Tests for Branch C agent identity challenge (asymmetric Ed25519)."""
 import time
 
-from ubag._challenge import generate_challenge, verify_challenge, _MemoryNonceStore, _stamp
+import pytest
+
+from ubag._challenge import (
+    ReplayStoreCapacityError,
+    generate_challenge,
+    verify_challenge,
+    _MemoryNonceStore,
+    _stamp,
+)
 from ubag._keys import generate_agent_keypair, agent_sign, agent_id
 
 SERVER_SECRET = "server-stamp-secret"
@@ -78,3 +86,15 @@ def test_missing_fields_rejected():
     ok, reason, _ = verify_challenge(SERVER_SECRET, "", 0, "", "", "", store=_MemoryNonceStore())
     assert ok is False
     assert reason == "missing_fields"
+
+
+def test_replay_store_capacity_never_evicts_live_entries():
+    store = _MemoryNonceStore(max_entries=10)
+    future = int(time.time()) + 3600
+    for index in range(10):
+        assert store.consume(f"id-{index}", future + index)
+    with pytest.raises(ReplayStoreCapacityError):
+        store.consume("capacity-attack", future + 100)
+    assert len(store._entries) == 10
+    assert store.capacity_exhaustions == 1
+    assert store.consume("id-0", future) is False
