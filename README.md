@@ -36,6 +36,21 @@ loop. This is that layer.
 
 ---
 
+## Try it
+
+**[Scan your site](https://ubagprotocol.com/ubag/scan)** to see what an AI agent
+actually gets from it today: the structured data it can use, what it has to guess
+from raw text, and whether you are blocking agents outright. You get a readiness
+score and ready-to-paste fixes generated from your own page.
+
+No signup, no change to your site, and no need to adopt UBAG. It is a read-only
+check that fetches your page the way an agent would.
+
+The scanner runs on [ubagprotocol.com](https://ubagprotocol.com), operated by
+Dixit Algorizmi, which runs this reference implementation in production.
+
+---
+
 ## The Problem
 
 When an autonomous MCP agent visits a website today:
@@ -364,13 +379,19 @@ cd ubag-node && npm install && npm test
 - [x] Audit hook — `audit_fn` callback on every request
 - [x] Python SDK (FastAPI/Starlette) + Node SDK (Express), cross-SDK verified
 - [x] Published — `pip install ubag` (PyPI) and `npm install ubag-web` (npm)
+- [x] Formal spec — [`docs/spec/`](docs/spec/): provenance envelope, verification
+      rules, normative failure codes, reverse-proxy deployment, and the
+      public/private trust boundary
+- [x] `ubag-provenance+jwt` profile — DPoP-shaped proof-of-possession with exact
+      request-target and RFC 9530 body-digest binding, single-use `jti` replay
+      protection, and shared [test vectors](docs/spec/test-vectors/v1.json)
+      verified across both SDKs
 
 **Planned / not yet built**
 - [ ] Django / Flask / Next.js middleware adapters
 - [ ] Hosted trust registry, revocation service, and issuer federation
 - [ ] WordPress plugin
 - [ ] Docker reference deployment (one-command self-host)
-- [ ] Formal spec docs (`docs/spec/…`)
 - [ ] Payment / revenue-share layer for site owners
 
 ---
