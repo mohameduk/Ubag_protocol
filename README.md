@@ -59,8 +59,8 @@ Every request to a UBAG-enabled site is routed through a 3-branch matrix:
 flowchart TD
     R[Incoming request] --> M{UBAG middleware}
     M -->|Valid X-UBAG-Credential| B["Branch B — Auto structured data<br/>declared JSON-LD + labeled content"]
-    M -->|Looks human| A["Branch A — Transparent proxy<br/>origin server, untouched"]
-    M -->|Unknown agent| C["Branch C — Sandbox + challenge<br/>sign a nonce with your Ed25519 key"]
+    M -->|No credential — default| A["Branch A — Transparent proxy<br/>your site, untouched"]
+    M -->|Wants agent access| C["Branch C — Sandbox + challenge<br/>sign a nonce with your Ed25519 key"]
     C -->|signature verified| I["Identity verified"]
     I --> P{Site authorization policy}
     P -->|approved → credential issued| B
