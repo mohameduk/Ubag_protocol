@@ -1,10 +1,21 @@
 {
   "name": "ubag-web",
   "version": "0.5.0",
-  "description": "UBAG Web Layer — agent identity and routing middleware for MCP-compatible agents (Express)",
+  "description": "UBAG Web Layer \u2014 agent identity and routing middleware for MCP-compatible agents (Express)",
   "main": "src/index.js",
-  "files": ["src", "README.md", "LICENSE"],
-  "keywords": ["mcp", "agents", "ai", "middleware", "routing", "bot-detection"],
+  "files": [
+    "src",
+    "README.md",
+    "LICENSE"
+  ],
+  "keywords": [
+    "mcp",
+    "agents",
+    "ai",
+    "middleware",
+    "routing",
+    "bot-detection"
+  ],
   "author": "Mohamed Ben Hadj Hmida",
   "license": "MIT",
   "repository": {
@@ -14,13 +25,15 @@
   "homepage": "https://ubagprotocol.com",
   "dependencies": {
     "jsonwebtoken": "^9.0.2",
-    "undici": "^6.19.2"
+    "undici": "^6.28.0"
   },
   "peerDependencies": {
     "express": "^4.18.0 || ^5.0.0"
   },
   "peerDependenciesMeta": {
-    "express": { "optional": true }
+    "express": {
+      "optional": true
+    }
   },
   "devDependencies": {
     "express": "^4.18.2",
@@ -32,6 +45,8 @@
   },
   "jest": {
     "testEnvironment": "node",
-    "testMatch": ["**/tests/**/*.test.js"]
+    "testMatch": [
+      "**/tests/**/*.test.js"
+    ]
   }
 }
