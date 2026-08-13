@@ -30,6 +30,12 @@ loop. This is that layer.
 > adopt (`ubag.json` discovery + a sign-the-nonce challenge + `X-UBAG-Credential`),
 > not a product you have to buy into.
 
+> **Not to be confused with UBAG Edge.** This repo is the **UBAG Web Layer**: MIT,
+> free, and everything you need to identify and route agents yourself. **UBAG Edge**
+> is a separate commercial product built on top of it that adds blocking
+> authorization, ownership binding and operator controls. Nothing here depends on
+> it, and nothing here is time-limited or feature-gated toward it.
+
 > **Status:** early but real. Two published SDKs — `pip install ubag` (Python) and
 > `npm install ubag-web` (Node) — sharing a cross-verifiable wire format.
 > See [Project status](#project-status) for exactly what works today vs. what's planned.
