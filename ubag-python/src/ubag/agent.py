@@ -91,7 +91,7 @@ class AgentCredential:
         """
         if not self._token:
             raise RuntimeError(
-                "No credential yet — solve a site challenge and call set_credential() first."
+                "No credential yet. Solve a site challenge and call set_credential() first."
             )
         parsed = urlsplit(path)
         if parsed.scheme and parsed.netloc:
