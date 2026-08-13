@@ -63,7 +63,7 @@ class AgentCredential {
    */
   headers(method = 'GET', path = '/', { host = '' } = {}) {
     if (!this._token) {
-      throw new Error('No credential yet — solve a site challenge and call setCredential() first.');
+      throw new Error('No credential yet. Solve a site challenge and call setCredential() first.');
     }
     let target = path;
     try {
