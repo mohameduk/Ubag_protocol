@@ -22,6 +22,15 @@ from ubag._keys import (
     build_jwks,
 )
 from ubag.agent import AgentCredential
+from ubag.client import Agent, ChallengeFailed, NotIdentified
+from ubag.scoped import (
+    index_fields,
+    manifest,
+    parse_fields,
+    resolve,
+    shape_payload,
+    split_ubag_query,
+)
 from ubag.provenance import (
     ProvenanceEnvelope,
     ProvenanceError,
@@ -33,6 +42,15 @@ from ubag.provenance import (
 
 __version__ = "0.5.0"
 __all__ = [
+    "Agent",
+    "ChallengeFailed",
+    "NotIdentified",
+    "index_fields",
+    "manifest",
+    "parse_fields",
+    "resolve",
+    "shape_payload",
+    "split_ubag_query",
     "UBAGMiddleware",
     "AgentCredential",
     "RoutingBranch",
