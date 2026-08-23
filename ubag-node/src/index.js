@@ -20,6 +20,18 @@ const {
   issuerPublicFromPrivate,
   buildJwks,
 }                                                 = require('./keys');
+// Scoped retrieval: the free, universal half of the protocol. Deliberately
+// not gated, because the value of an agent identity grows with the number of
+// sites that answer one.
+const {
+  indexFields,
+  manifest,
+  resolve,
+  parseFields,
+  splitUbagQuery,
+  shapePayload,
+}                                                 = require('./scoped');
+const { Agent, ChallengeFailed, NotIdentified }   = require('./client');
 const {
   ProvenanceError,
   parseProvenance,
@@ -30,6 +42,15 @@ const {
 module.exports = {
   ubag,
   AgentCredential,
+  Agent,
+  ChallengeFailed,
+  NotIdentified,
+  indexFields,
+  manifest,
+  resolve,
+  parseFields,
+  splitUbagQuery,
+  shapePayload,
   Branch,
   resolveBranch,
   CREDENTIAL_HEADER,
