@@ -49,3 +49,12 @@ where = ["src"]
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]
+# Test the source tree, not whatever happens to be installed.
+#
+# Without this, `pytest` in this directory imports ubag from site-packages. A
+# stale build there had no scoped.py, client.py or _compact.py, so an entire
+# feature set was reported as 79 passing tests while none of it was loaded. CI
+# installs the package first and was never affected, which is the worst version
+# of this: green everywhere, meaningless locally, and no signal that the two
+# disagree.
+pythonpath = ["src"]
