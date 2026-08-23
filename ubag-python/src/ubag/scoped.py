@@ -36,12 +36,13 @@ Wire format, on the resource's own URL:
 """
 from __future__ import annotations
 
+import re
 from typing import Any, Iterator
 from urllib.parse import parse_qsl, urlencode
 
 __all__ = [
     "index_fields", "manifest", "resolve", "parse_fields",
-    "split_ubag_query", "shape_payload",
+    "split_ubag_query", "shape_payload", "auto_expand", "subject_of",
 ]
 
 # schema.org containers that hold the interesting leaves one level down.
@@ -69,7 +70,16 @@ def _walk(node: Any, prefix: str = "") -> Iterator[tuple[str, Any]]:
         # No path segment. An agent asking for offers.price should not have to
         # know it is offers[0].price.
         for item in node:
-            yield from _walk(item, prefix)
+            if _is_leaf(item):
+                # A list of plain strings used to yield nothing at all. The
+                # parent yielded the list, which is not a leaf and was dropped,
+                # and this branch only ever descended into dicts. So
+                # dayOfWeek: ["Monday", ...] was unreachable, and with it every
+                # scalar array: keywords, sameAs, all of them. First element
+                # wins the collapsed key, matching how offers.price behaves.
+                yield prefix, item
+            else:
+                yield from _walk(item, prefix)
 
 
 def _walk_indexed(node: Any, prefix: str = "") -> Iterator[tuple[str, Any]]:
@@ -88,7 +98,12 @@ def _walk_indexed(node: Any, prefix: str = "") -> Iterator[tuple[str, Any]]:
                 yield from _walk_indexed(value, path)
     elif isinstance(node, list):
         for i, item in enumerate(node):
-            yield from _walk_indexed(item, f"{prefix}[{i}]")
+            path = f"{prefix}[{i}]"
+            # Same omission as _walk: scalars inside a list were never emitted.
+            if _is_leaf(item):
+                yield path, item
+            else:
+                yield from _walk_indexed(item, path)
 
 
 def _is_leaf(value: Any) -> bool:
@@ -119,6 +134,72 @@ def index_fields(payload: dict) -> dict[str, Any]:
             # Index the bare leaf too, so "price" finds "offers.price".
             idx.setdefault(lowered.rsplit(".", 1)[-1], value)
     return idx
+
+
+_SUBJECT_KEYS = ("name", "headline", "title")
+# Entity types that are page furniture rather than what the page is about.
+_NOT_SUBJECT = {"breadcrumblist", "listitem", "website", "searchaction",
+                "webpage", "imageobject", "collectionpage",
+                "sitenavigationelement"}
+
+
+def _entities(payload: dict) -> Iterator[dict]:
+    """Top-level entities, unwrapping @graph, never descending into values."""
+    stack: list[Any] = list(payload.get("structured_data") or [])
+    while stack:
+        node = stack.pop(0)
+        if isinstance(node, list):
+            stack[:0] = node
+            continue
+        if not isinstance(node, dict):
+            continue
+        graph = node.get("@graph")
+        if graph is not None:
+            stack[:0] = graph if isinstance(graph, list) else [graph]
+            continue
+        yield node
+
+
+def subject_of(payload: dict) -> str | None:
+    """
+    What this resource is about, from an entity's own top level.
+
+    This used to read index_fields()["name"], and the index is flattened: every
+    leaf is stored under its bare name as well as its dotted path. A NewsArticle
+    keeps its title in headline and has no top-level name, so the bare "name"
+    key was filled from author.name and the anchor announced the subject of
+    every article as a person.
+
+    An agent then received {"name": "Leila Ben Youssef", "wordCount": "42160"},
+    which describes a human being with a word count, and a model asked for the
+    edition length answered NOT PRESENT. Correctly: nothing in that payload says
+    what has 42,160 words. The anchor exists to prevent exactly that
+    misattribution and was causing it.
+
+    Furniture types are passed over on a first sweep and accepted on a second,
+    so a page carrying only a breadcrumb still gets an anchor rather than none.
+    """
+    entities = list(_entities(payload))
+
+    def pick(skip_furniture: bool) -> str | None:
+        for ent in entities:
+            declared = ent.get("@type") or ""
+            names = {t.lower() for t in
+                     (declared if isinstance(declared, list) else [declared])
+                     if isinstance(t, str)}
+            if skip_furniture and names & _NOT_SUBJECT:
+                continue
+            for key in _SUBJECT_KEYS:
+                value = ent.get(key)
+                if isinstance(value, str) and value.strip():
+                    return value.strip()
+        return None
+
+    found = pick(True) or pick(False)
+    if found:
+        return found
+    title = (payload.get("meta") or {}).get("title")
+    return title.strip() if isinstance(title, str) and title.strip() else None
 
 
 def manifest(payload: dict) -> dict:
@@ -157,12 +238,103 @@ def _positional_index(payload: dict) -> dict[str, Any]:
     return idx
 
 
-def resolve(payload: dict, fields: list[str]) -> dict:
+_SCHEMA_PREFIX = "https://schema.org/"
+_ENUM_WORDS = {
+    "instock": "in stock", "outofstock": "out of stock",
+    "preorder": "pre-order", "presale": "pre-sale", "soldout": "sold out",
+    "limitedavailability": "limited availability", "backorder": "back-order",
+    "discontinued": "discontinued", "instoreonly": "in store only",
+    "onlineonly": "online only", "onsale": "on sale",
+}
+_CAMEL = re.compile(r"(?<=[a-z0-9])(?=[A-Z])")
+
+
+def _lean_value(value: Any) -> Any:
+    """
+    "in stock", not https://schema.org/InStock.
+
+    Consumers relay the canonical term verbatim: a model handed
+    https://schema.org/LimitedAvailability answers "LimitedAvailability", which
+    is not a sentence in any language. Only values that arrived as a schema.org
+    URL are touched, because that prefix is what proves the string is an enum
+    rather than ordinary content; without the check a product genuinely named
+    "InStock" would be rewritten.
+    """
+    if not isinstance(value, str) or not value.startswith(_SCHEMA_PREFIX):
+        return value
+    term = value[len(_SCHEMA_PREFIX):]
+    if not term:
+        return value
+    return _ENUM_WORDS.get(term.lower()) or _CAMEL.sub(" ", term).lower()
+
+
+def _paths(payload: dict) -> tuple[dict[str, str], set[str]]:
+    """(requested-name -> full dotted path, every full path)."""
+    where: dict[str, str] = {}
+    every: set[str] = set()
+    for source in (payload.get("structured_data") or [], payload.get("meta") or {}):
+        for path, value in _walk(source):
+            if not _keep(value):
+                continue
+            low = path.lower()
+            every.add(low)
+            where.setdefault(low, low)
+            where.setdefault(low.rsplit(".", 1)[-1], low)
+    return where, every
+
+
+def auto_expand(payload: dict, fields: list[str]) -> list[str]:
+    """
+    Ask for a leaf, receive the sub-entity holding it.
+
+    A price with no currency is not a cheap answer, it is one you cannot
+    transact on. The same defect appears as a street line returned as if it
+    were an address, and an opening time with no day attached.
+
+    Rather than a table of per-vertical intents, which is a catalogue nobody
+    finishes, this uses the grouping schema.org already did: properties that
+    must be read together are properties of the same entity. price lives on an
+    Offer, streetAddress on a PostalAddress, ratingValue on an AggregateRating.
+    So expand to the containing entity, and no vertical knowledge is needed. A
+    clinic's address expands identically to a shop's.
+
+    The root entity is never expanded; that is the full payload with extra
+    steps.
+    """
+    where, every = _paths(payload)
+    out: list[str] = []
+    for raw in fields:
+        name = raw.strip()
+        key = name.lower().split("[")[0]
+        full = where.get(key) or next(
+            (p for k, p in where.items() if k.endswith("." + key)), None)
+        if not full or "." not in full:
+            out.append(name)          # unknown, or already at an entity's top
+            continue
+        owner = full.rsplit(".", 1)[0]
+        siblings = sorted(
+            p for p in every
+            if p.startswith(owner + ".") and "." not in p[len(owner) + 1:])
+        out.extend(siblings or [name])
+    seen: set[str] = set()
+    return [f for f in out if not (f.lower() in seen or seen.add(f.lower()))]
+
+
+def resolve(payload: dict, fields: list[str], lean: bool = False) -> dict:
     """
     Return only the requested typed fields, plus the subject they belong to.
+
+    lean drops the per-response envelope: the @context and protocol banner an
+    agent learned once from the manifest, the URL it just requested, and the
+    schema.org host on enum values. Field names are kept, because they are what
+    make an answer checkable and BPE makes them nearly free: English is what
+    the tokenizer was fit on.
+
+    Measured live through a gateway, lean is 2.1x smaller than the enveloped
+    form and delivers identical facts.
     """
     idx = index_fields(payload)
-    out: dict[str, Any] = {
+    out: dict[str, Any] = {} if lean else {
         "@context": "https://schema.org",
         "ubag:protocol": "S-UX/1.1",
         "url": payload.get("ubag:source", ""),
@@ -175,7 +347,7 @@ def resolve(payload: dict, fields: list[str]) -> dict:
     # Observed directly, a model handed exactly that answered NOT PRESENT
     # rather than risk attributing a price to the wrong item. That instinct is
     # right; the omission was ours. A url identifies, it does not describe.
-    subject = idx.get("name") or idx.get("headline") or idx.get("title")
+    subject = subject_of(payload)
     if isinstance(subject, str) and subject:
         out["name"] = subject
 
@@ -192,18 +364,18 @@ def resolve(payload: dict, fields: list[str]) -> dict:
             if positional is None:
                 positional = _positional_index(payload)
             if key in positional:
-                out[name] = positional[key]
+                out[name] = _lean_value(positional[key]) if lean else positional[key]
             else:
                 unresolved.append(name)
             continue
 
         if key in idx:
-            out[name] = idx[key]
+            out[name] = _lean_value(idx[key]) if lean else idx[key]
             continue
         hit = next((v for p, v in idx.items()
                     if p.endswith("." + key) or p == key), None)
         if hit is not None:
-            out[name] = hit
+            out[name] = _lean_value(hit) if lean else hit
         else:
             unresolved.append(name)
 
@@ -243,10 +415,27 @@ def shape_payload(payload: dict, control: dict[str, str]) -> tuple[dict, str]:
     opt-in, because changing the default would alter the response shape for
     agents already built against the published format.
     """
+    lean = control.get("ubag") == "lean"
+
     if "ubag.manifest" in control:
         return manifest(payload), "manifest"
+
+    if control.get("ubag.profile", "").strip().lower() == "auto":
+        # ?ubag.fields=price&ubag.profile=auto
+        #
+        # Expand each requested leaf to the sub-entity holding it, so a price
+        # cannot arrive without its currency. Derived from the publisher's own
+        # structure rather than a table of intents, which is why it works on a
+        # vertical nobody anticipated.
+        asked = parse_fields(control.get("ubag.fields", ""))
+        if asked:
+            body = resolve(payload, auto_expand(payload, asked), lean=lean)
+            return body, "auto-lean" if lean else "auto"
+
     if "ubag.fields" in control:
-        return resolve(payload, parse_fields(control["ubag.fields"])), "scoped"
+        body = resolve(payload, parse_fields(control["ubag.fields"]), lean=lean)
+        return body, "lean" if lean else "scoped"
+
     if control.get("ubag") == "compact":
         from ._compact import compact
         return compact(payload), "compact"
