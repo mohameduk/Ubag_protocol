@@ -43,6 +43,7 @@ from urllib.parse import parse_qsl, urlencode
 __all__ = [
     "index_fields", "manifest", "resolve", "parse_fields",
     "split_ubag_query", "shape_payload", "auto_expand", "subject_of",
+    "expand_profiles", "PROFILES",
 ]
 
 # schema.org containers that hold the interesting leaves one level down.
@@ -320,6 +321,61 @@ def auto_expand(payload: dict, fields: list[str]) -> list[str]:
     return [f for f in out if not (f.lower() in seen or seen.add(f.lower()))]
 
 
+# Named intents, for the cases that are not structural.
+#
+# auto_expand covers everything that schema.org groups onto an entity, which is
+# most of it. These are the few that are genuinely an intent rather than a
+# shape: "contact" spans telephone, email and address, which live on different
+# entities, and "hours" needs every openingHoursSpecification entry with its
+# position, because "when do you open on Saturday" is unanswerable from an
+# index that collapses lists to their first element.
+PROFILES: dict[str, tuple[str, ...]] = {
+    "price": ("price", "priceCurrency", "availability"),
+    "rating": ("ratingValue", "reviewCount", "bestRating"),
+    "address": ("streetAddress", "addressLocality", "addressRegion",
+                "postalCode", "addressCountry"),
+    "contact": ("telephone", "email", "streetAddress", "addressLocality",
+                "addressCountry"),
+    "hours": ("openingHoursSpecification",),
+}
+
+
+def _positional_paths(payload: dict) -> list[str]:
+    """Indexed paths in the casing the publisher used, in document order."""
+    out: list[str] = []
+    seen: set[str] = set()
+    sources = list(payload.get("structured_data") or [])
+    sources.append(payload.get("meta") or {})
+    for source in sources:
+        for path, value in _walk_indexed(source):
+            if not _keep(value) or path.lower() in seen:
+                continue
+            seen.add(path.lower())
+            out.append(path)
+    return out
+
+
+def expand_profiles(payload: dict, names: list[str]) -> list[str]:
+    """Turn profile names into the field list that answers them completely."""
+    out: list[str] = []
+    for raw in names:
+        key = raw.strip().lower()
+        keys = PROFILES.get(key)
+        if not keys:
+            continue
+        if key == "hours":
+            # Publisher casing, not the lowercased index key: the response uses
+            # the requested name verbatim, and openinghoursspecification[1].opens
+            # is not a field name anyone wrote. @type is dropped as plumbing.
+            hours = [p for p in _positional_paths(payload)
+                     if p.lower().startswith("openinghoursspecification[")
+                     and not p.lower().endswith(".@type")]
+            out.extend(hours or list(keys))
+        else:
+            out.extend(keys)
+    return out
+
+
 def resolve(payload: dict, fields: list[str], lean: bool = False) -> dict:
     """
     Return only the requested typed fields, plus the subject they belong to.
@@ -420,17 +476,28 @@ def shape_payload(payload: dict, control: dict[str, str]) -> tuple[dict, str]:
     if "ubag.manifest" in control:
         return manifest(payload), "manifest"
 
-    if control.get("ubag.profile", "").strip().lower() == "auto":
-        # ?ubag.fields=price&ubag.profile=auto
-        #
-        # Expand each requested leaf to the sub-entity holding it, so a price
-        # cannot arrive without its currency. Derived from the publisher's own
-        # structure rather than a table of intents, which is why it works on a
-        # vertical nobody anticipated.
-        asked = parse_fields(control.get("ubag.fields", ""))
-        if asked:
-            body = resolve(payload, auto_expand(payload, asked), lean=lean)
-            return body, "auto-lean" if lean else "auto"
+    if "ubag.profile" in control:
+        names = parse_fields(control["ubag.profile"])
+        if [n.strip().lower() for n in names] == ["auto"]:
+            # ?ubag.fields=price&ubag.profile=auto
+            #
+            # Expand each requested leaf to the sub-entity holding it, so a
+            # price cannot arrive without its currency. Derived from the
+            # publisher's own structure rather than a table of intents, which
+            # is why it works on a vertical nobody anticipated.
+            asked = parse_fields(control.get("ubag.fields", ""))
+            if asked:
+                body = resolve(payload, auto_expand(payload, asked), lean=lean)
+                return body, "auto-lean" if lean else "auto"
+
+        expanded = expand_profiles(payload, names)
+        if expanded:
+            fields = expanded + parse_fields(control.get("ubag.fields", ""))
+            return resolve(payload, fields, lean=lean), \
+                "profile-lean" if lean else "profile"
+        # An unrecognised profile name falls through to ubag.fields rather than
+        # claiming the mode. Reporting "profile" for a request no profile served
+        # would make a typo indistinguishable from a page with no data.
 
     if "ubag.fields" in control:
         body = resolve(payload, parse_fields(control["ubag.fields"]), lean=lean)
