@@ -86,3 +86,51 @@ def test_auto_needs_no_vertical_knowledge():
     assert mode == "auto"
     assert body["address.streetaddress"] == "120 King St W"
     assert body["address.addresscountry"] == "CA"
+
+
+# ---------------------------------------------------------------------------
+# Named profiles, for intents that are not structural
+# ---------------------------------------------------------------------------
+
+PRODUCT = {
+    "ubag:source": "https://example.com/p/1",
+    "structured_data": [{
+        "@type": "Product", "name": "Manteau 3391", "sku": "MF-M3391",
+        "offers": {"@type": "Offer", "price": "689.00", "priceCurrency": "EUR",
+                   "availability": "https://schema.org/InStock"},
+        "aggregateRating": {"@type": "AggregateRating",
+                            "ratingValue": "4.8", "reviewCount": 184},
+    }],
+    "meta": {},
+}
+
+
+def test_price_profile_binds_the_currency_to_the_amount():
+    body, mode = shape_payload(PRODUCT, {"ubag.profile": "price"})
+    assert mode == "profile"
+    assert body["price"] == "689.00"
+    assert body["priceCurrency"] == "EUR"
+
+
+def test_hours_profile_answers_a_specific_day():
+    """
+    'What time do you open on Saturday' is unanswerable from an index that
+    collapses lists to their first element, which is why hours is a named
+    profile rather than left to structural expansion.
+    """
+    body, _ = shape_payload(STORE, {"ubag.profile": "hours"})
+    flat = {k: v for k, v in body.items() if "openingHours" in k}
+    assert any(v == "Saturday" for v in flat.values())
+    assert any(v == "10:00" for v in flat.values())
+    # Publisher casing, and @type is plumbing that answers nothing.
+    assert any(k.startswith("openingHoursSpecification[") for k in flat)
+    assert not any(k.endswith(".@type") for k in flat)
+
+
+def test_an_unknown_profile_does_not_claim_the_mode():
+    # Falls through to ubag.fields, so a typo cannot look like a page with no
+    # data.
+    body, mode = shape_payload(PRODUCT, {"ubag.profile": "nonsense",
+                                         "ubag.fields": "sku"})
+    assert mode == "scoped"
+    assert body["sku"] == "MF-M3391"
