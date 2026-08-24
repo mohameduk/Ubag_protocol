@@ -263,7 +263,11 @@ function autoExpand(payload, fields) {
     if (!full || !full.includes('.')) { out.push(name); continue; }
     const owner = full.slice(0, full.lastIndexOf('.'));
     const siblings = [...every]
-      .filter((p) => p.startsWith(`${owner}.`) && !p.slice(owner.length + 1).includes('.'))
+      .filter((p) => p.startsWith(`${owner}.`)
+        && !p.slice(owner.length + 1).includes('.')
+        // @type is plumbing: "offers.@type": "Offer" answers nothing an agent
+        // could not read off the field names.
+        && !p.endsWith('.@type'))
       .sort();
     out.push(...(siblings.length ? siblings : [name]));
   }

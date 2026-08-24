@@ -315,7 +315,11 @@ def auto_expand(payload: dict, fields: list[str]) -> list[str]:
         owner = full.rsplit(".", 1)[0]
         siblings = sorted(
             p for p in every
-            if p.startswith(owner + ".") and "." not in p[len(owner) + 1:])
+            if p.startswith(owner + ".") and "." not in p[len(owner) + 1:]
+            # @type is plumbing. "offers.@type": "Offer" answers nothing an
+            # agent could not read off the field names, and the hours profile
+            # already drops it.
+            and not p.endswith(".@type"))
         out.extend(siblings or [name])
     seen: set[str] = set()
     return [f for f in out if not (f.lower() in seen or seen.add(f.lower()))]
