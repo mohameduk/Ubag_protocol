@@ -189,3 +189,118 @@ test('parseFields trims and drops empties', () => {
   expect(parseFields(' price , , sku ')).toEqual(['price', 'sku']);
   expect(parseFields('')).toEqual([]);
 });
+
+// ---------------------------------------------------------------------------
+// Two bugs that shipped in v0.5.0
+// ---------------------------------------------------------------------------
+
+const ARTICLE = {
+  'ubag:source': 'https://example.com/journal/gestes.html',
+  structured_data: [{
+    '@context': 'https://schema.org',
+    '@type': 'NewsArticle',
+    headline: 'Les gestes de la main',
+    wordCount: '42160',
+    author: { '@type': 'Person', name: 'Leila Ben Youssef' },
+    publisher: { '@type': 'Organization', name: 'Maison Fathia' },
+  }],
+  meta: {},
+};
+
+const STORE = {
+  'ubag:source': 'https://example.com/',
+  structured_data: [{
+    '@type': 'Store',
+    name: 'Maison Fathia',
+    openingHoursSpecification: [
+      { '@type': 'OpeningHoursSpecification',
+        dayOfWeek: ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday'],
+        opens: '09:30', closes: '18:30' },
+      { '@type': 'OpeningHoursSpecification', dayOfWeek: 'Saturday',
+        opens: '10:00', closes: '17:00' },
+    ],
+  }],
+  meta: {},
+};
+
+test('the anchor names the article, not its author', () => {
+  // The index is flattened, so the bare key "name" was filled from author.name
+  // and every article told agents its subject was a person. Handed
+  // {"name":"Leila Ben Youssef","wordCount":"42160"} and asked for the edition
+  // length, a model answered NOT PRESENT. Correctly: nothing in that payload
+  // says what has 42,160 words.
+  const body = resolve(ARTICLE, ['wordCount']);
+  expect(body.name).toBe('Les gestes de la main');
+  expect(body.wordCount).toBe('42160');
+});
+
+test('a nested publisher is not the subject either', () => {
+  expect(resolve(ARTICLE, ['wordCount']).name).not.toBe('Maison Fathia');
+});
+
+test('a list of plain strings is reachable', () => {
+  // Both walkers only recursed into objects, so a scalar array emitted nothing.
+  // dayOfWeek was unreachable, and with it keywords, sameAs, all of them.
+  expect(resolve(STORE, ['dayOfWeek']).dayOfWeek).toBe('Monday');
+});
+
+test('a specific element of a scalar list is reachable', () => {
+  const body = resolve(STORE, ['openingHoursSpecification[0].dayOfWeek[4]']);
+  expect(body['openingHoursSpecification[0].dayOfWeek[4]']).toBe('Friday');
+});
+
+// ---------------------------------------------------------------------------
+// Containing-entity expansion, and lean
+// ---------------------------------------------------------------------------
+
+test('auto expands a price to the offer holding it', () => {
+  const { body, mode } = shapePayload(PAYLOAD, {
+    'ubag.fields': 'price', 'ubag.profile': 'auto',
+  });
+  expect(mode).toBe('auto');
+  expect(body['offers.price']).toBe('689.00');
+  expect(body['offers.pricecurrency']).toBe('EUR');
+});
+
+test('auto needs no vertical knowledge', () => {
+  // Nothing here knows what a clinic is.
+  const clinic = {
+    'ubag:source': 'https://example.clinic/',
+    structured_data: [{
+      '@type': 'MedicalClinic',
+      name: 'Hamilton Family Practice',
+      address: { '@type': 'PostalAddress', streetAddress: '120 King St W',
+        addressLocality: 'Hamilton', addressCountry: 'CA' },
+    }],
+    meta: {},
+  };
+  const { body } = shapePayload(clinic, {
+    'ubag.fields': 'streetAddress', 'ubag.profile': 'auto',
+  });
+  expect(body['address.streetaddress']).toBe('120 King St W');
+  expect(body['address.addresscountry']).toBe('CA');
+});
+
+test('auto does not open the root entity', () => {
+  const { body } = shapePayload(PAYLOAD, {
+    'ubag.fields': 'sku', 'ubag.profile': 'auto',
+  });
+  expect(body.sku).toBe('MF-M3391');
+  expect(body.material).toBeUndefined();
+});
+
+test('lean drops the envelope and reads the enum aloud', () => {
+  const { body, mode } = shapePayload(PAYLOAD, {
+    'ubag.fields': 'availability', 'ubag': 'lean',
+  });
+  expect(mode).toBe('lean');
+  expect(body.availability).toBe('in stock');
+  expect(body['@context']).toBeUndefined();
+  expect(body.url).toBeUndefined();
+  expect(body.name).toBe('Manteau 3391');   // the anchor is not envelope
+});
+
+test('scoped keeps the canonical url so existing agents keep working', () => {
+  const { body } = shapePayload(PAYLOAD, { 'ubag.fields': 'availability' });
+  expect(body.availability).toBe('https://schema.org/InStock');
+});
