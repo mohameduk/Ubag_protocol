@@ -16,8 +16,13 @@ from __future__ import annotations
 
 import pytest
 
+from pathlib import Path
+
 from ubag import __version__
-from ubag._init_skill import SKILLS, check, install, main, skill_version
+from ubag import _init_skill
+from ubag._init_skill import (
+    PLACEHOLDER, SKILLS, check, install, main, skill_version,
+)
 
 
 def skill_path(root, name):
@@ -155,6 +160,41 @@ def test_check_on_a_repo_with_no_skills_is_clean(tmp_path):
     """Absence is not staleness. Nothing installed, nothing to warn about."""
     assert check(tmp_path) == []
     assert main(["init", "--check", "--dir", str(tmp_path)]) == 0
+
+
+def test_a_skill_goes_stale_when_the_sdk_moves_on(tmp_path):
+    """
+    The regression this whole mechanism exists for, and it was broken.
+
+    The stamp used to be a literal in the template. Written under 0.6.0 it said
+    0.6.0 forever, so on 0.6.1 a skill created one second ago reported itself
+    stale, and on the release after that so did every other one. A staleness
+    check that fires on files it just wrote is a check people turn off.
+
+    Written at one version, read at the next: stale, and it names the old one.
+    """
+    install(tmp_path, ["publisher"], version="0.6.0")
+    assert check(tmp_path, version="0.6.0") == []
+    assert check(tmp_path, version="0.6.1") == [("ubag-publisher", "0.6.0")]
+
+
+def test_the_placeholder_never_reaches_the_written_file(tmp_path):
+    """A visible {{ubag_version}} in someone's repo is the substitution failing
+    loudly enough to notice, which is the only good version of that failure."""
+    for _, path, _ in install(tmp_path, list(SKILLS)):
+        assert PLACEHOLDER not in path.read_text(encoding="utf-8")
+
+
+def test_the_shipped_templates_still_hold_the_placeholder():
+    """
+    Guards the other direction. If someone bakes a literal back into the
+    template, substitution silently becomes a no-op and the bug returns with
+    every test above it still green.
+    """
+    for kind in SKILLS:
+        raw = (Path(_init_skill.__file__).parent / "_skills" / f"{kind}.md") \
+            .read_text(encoding="utf-8")
+        assert PLACEHOLDER in raw
 
 
 def test_every_shipped_template_carries_a_version_stamp(tmp_path):

@@ -1,7 +1,7 @@
 ---
 name: ubag-publisher
 description: Serving a website through the UBAG web layer. Read before touching UBAG middleware config, routing branches, or the scoped-retrieval endpoint.
-ubag_skill_version: 0.6.0
+ubag_skill_version: {{ubag_version}}
 ---
 
 # UBAG, publisher side

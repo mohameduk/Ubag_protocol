@@ -42,8 +42,21 @@ function sdkVersion() {
   return require('../package.json').version;
 }
 
-function template(kind) {
-  return fs.readFileSync(path.join(__dirname, 'skills', `${kind}.md`), 'utf8');
+const PLACEHOLDER = '{{ubag_version}}';
+
+/**
+ * The shipped template for one audience, stamped with the SDK version.
+ *
+ * The stamp is substituted at write time rather than written into the template
+ * as a literal. A literal was the first attempt and it is silently wrong: the
+ * file ships stamped with whatever release it was authored under, check()
+ * compares that stamp to the *installed* version, and every bump makes a
+ * freshly written skill report itself stale on the spot.
+ */
+function template(kind, version) {
+  const text = fs.readFileSync(
+    path.join(__dirname, 'skills', `${kind}.md`), 'utf8');
+  return text.split(PLACEHOLDER).join(version || sdkVersion());
 }
 
 function skillVersion(text) {
@@ -68,21 +81,22 @@ function write(target, text) {
   return 'written';
 }
 
-function install(root, kinds) {
+function install(root, kinds, version) {
   return kinds.map((kind) => {
     const target = path.join(root, '.agents', 'skills', SKILLS[kind], 'SKILL.md');
-    return { kind, target, outcome: write(target, template(kind)) };
+    return { kind, target, outcome: write(target, template(kind, version)) };
   });
 }
 
 /** Skills present in `root` whose stamp is not this SDK's version. */
-function check(root) {
+function check(root, version) {
+  const want = version || sdkVersion();
   const stale = [];
   for (const name of Object.values(SKILLS)) {
     const target = path.join(root, '.agents', 'skills', name, 'SKILL.md');
     if (!fs.existsSync(target)) continue;
     const found = skillVersion(fs.readFileSync(target, 'utf8'));
-    if (found !== sdkVersion()) stale.push({ name, found });
+    if (found !== want) stale.push({ name, found });
   }
   return stale;
 }
@@ -142,4 +156,6 @@ function main(argv = process.argv.slice(2)) {
   return 0;
 }
 
-module.exports = { main, install, check, skillVersion, template, SKILLS, sdkVersion };
+module.exports = {
+  main, install, check, skillVersion, template, SKILLS, sdkVersion, PLACEHOLDER,
+};
