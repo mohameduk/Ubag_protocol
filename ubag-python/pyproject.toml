@@ -43,8 +43,17 @@ dev = [
 Homepage = "https://ubagprotocol.com"
 Repository = "https://github.com/mohameduk/Ubag_protocol"
 
+[project.scripts]
+ubag = "ubag._init_skill:main"
+
 [tool.setuptools.packages.find]
 where = ["src"]
+
+# The skill templates are data, not code, so packages.find does not carry them.
+# Without this the wheel ships _init_skill.py and no _skills/ directory, and
+# `ubag init` fails at read_text on a file that was never installed.
+[tool.setuptools.package-data]
+ubag = ["_skills/*.md"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

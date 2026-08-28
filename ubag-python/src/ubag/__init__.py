@@ -40,7 +40,23 @@ from ubag.provenance import (
     verify_provenance,
 )
 
-__version__ = "0.5.0"
+# Read from installed metadata rather than restated here.
+#
+# This said 0.5.0 while pyproject said 0.6.0, through a release. Nothing broke,
+# because nothing read it. `ubag init` now does: it stamps the version into the
+# skill file it writes and later compares the two to tell the user their copy is
+# stale. A hardcoded literal that drifts silently makes that check lie.
+#
+# The fallback is for running out of a source tree with nothing installed, where
+# there is no metadata to read.
+try:
+    from importlib.metadata import PackageNotFoundError, version as _pkg_version
+    try:
+        __version__ = _pkg_version("ubag")
+    except PackageNotFoundError:
+        __version__ = "0.6.0"
+except ImportError:  # pragma: no cover
+    __version__ = "0.6.0"
 __all__ = [
     "Agent",
     "ChallengeFailed",
