@@ -47,6 +47,21 @@ serves its issuer key as JWKS at `/.well-known/jwks.json`. Credentials are
 holder-of-key: agents attach a one-time request-bound proof-of-possession via
 `agent.headers(method, absolute_url)`.
 
+## Teach your coding agent
+
+```bash
+ubag init            # you are serving a site through UBAG
+ubag init --agent    # you are building an agent that reads UBAG-enabled sites
+ubag init --both
+```
+
+Writes `.agents/skills/ubag-*/SKILL.md` into your project, and creates `AGENTS.md`
+and `CLAUDE.md` only if they do not already exist. An `AGENTS.md` you already have
+is never modified; the line to add is printed instead. Safe to re-run.
+
+`ubag init --check` reports whether the copy in your repo is older than the
+installed SDK.
+
 A Node/Express SDK with an identical, cross-verifiable wire format is in the same
 repo. Full docs, a runnable demo, and the protocol details:
 **https://github.com/mohameduk/Ubag_protocol**
