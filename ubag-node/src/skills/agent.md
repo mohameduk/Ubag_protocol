@@ -1,7 +1,7 @@
 ---
 name: ubag-agent
 description: Reading websites as an autonomous agent through UBAG scoped retrieval. Read before writing code that fetches a web page to extract a fact from it.
-ubag_skill_version: 0.6.0
+ubag_skill_version: {{ubag_version}}
 ---
 
 # UBAG, agent side

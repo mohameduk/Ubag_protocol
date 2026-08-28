@@ -57,10 +57,23 @@ fetches a web page to extract a fact from it.
 _CLAUDE_MD = "@AGENTS.md\n"
 
 
-def _template(kind: str) -> str:
-    """The shipped template text for one audience."""
+PLACEHOLDER = "{{ubag_version}}"
+
+
+def _template(kind: str, version: str | None = None) -> str:
+    """
+    The shipped template for one audience, stamped with the SDK version.
+
+    The stamp is substituted at write time rather than written into the template
+    as a literal. A literal was the first attempt and it is silently wrong: the
+    file ships stamped with whatever release it was authored under, check()
+    compares that stamp to the *installed* version, and every bump makes a
+    freshly written skill report itself stale on the spot. Nobody would have
+    seen it until the next release, and then everyone would.
+    """
     path = Path(__file__).parent / "_skills" / f"{kind}.md"
-    return path.read_text(encoding="utf-8")
+    text = path.read_text(encoding="utf-8")
+    return text.replace(PLACEHOLDER, version or __version__)
 
 
 def skill_version(text: str) -> str | None:
@@ -88,17 +101,18 @@ def _write(path: Path, text: str) -> str:
     return "written"
 
 
-def install(root: Path, kinds: list[str]) -> list[tuple[str, Path, str]]:
+def install(root: Path, kinds: list[str],
+            version: str | None = None) -> list[tuple[str, Path, str]]:
     """Copy the templates into `root`. Returns (kind, path, outcome) per file."""
     done: list[tuple[str, Path, str]] = []
     for kind in kinds:
         name = SKILLS[kind]
         target = root / ".agents" / "skills" / name / "SKILL.md"
-        done.append((kind, target, _write(target, _template(kind))))
+        done.append((kind, target, _write(target, _template(kind, version))))
     return done
 
 
-def check(root: Path) -> list[tuple[str, str | None]]:
+def check(root: Path, version: str | None = None) -> list[tuple[str, str | None]]:
     """
     Compare each installed skill against this SDK's version.
 
@@ -106,13 +120,14 @@ def check(root: Path) -> list[tuple[str, str | None]]:
     nobody re-runs init unprompted. Returns (name, installed_version) for every
     skill found whose stamp is not this version.
     """
+    want = version or __version__
     stale: list[tuple[str, str | None]] = []
     for name in SKILLS.values():
         path = root / ".agents" / "skills" / name / "SKILL.md"
         if not path.exists():
             continue
         found = skill_version(path.read_text(encoding="utf-8"))
-        if found != __version__:
+        if found != want:
             stale.append((name, found))
     return stale
 
