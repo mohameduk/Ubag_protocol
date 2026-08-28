@@ -54,7 +54,7 @@ try:
     try:
         __version__ = _pkg_version("ubag")
     except PackageNotFoundError:
-        __version__ = "0.6.0"
+        __version__ = "0.7.0"
 except ImportError:  # pragma: no cover
     __version__ = "0.6.0"
 __all__ = [
