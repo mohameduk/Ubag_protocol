@@ -171,9 +171,19 @@ def test_the_version_is_not_a_hardcoded_literal_that_drifted():
     __init__ said 0.5.0 while pyproject said 0.6.0, through a release. Harmless
     until init started stamping it into files and comparing them later.
     """
-    import tomllib
+    import re
     from pathlib import Path
 
-    pyproject = Path(__file__).resolve().parents[1] / "pyproject.toml"
-    declared = tomllib.loads(pyproject.read_text(encoding="utf-8"))["project"]["version"]
-    assert __version__ == declared
+    # Read the line rather than parse the file. tomllib is 3.11+, this package
+    # supports 3.10, and a test that skips on the oldest supported version is
+    # not watching the runtime most likely to be somebody's system default.
+    # One regex covers the whole matrix.
+    pyproject = (Path(__file__).resolve().parents[1] / "pyproject.toml") \
+        .read_text(encoding="utf-8")
+    declared = re.search(r'^version\s*=\s*"([^"]+)"', pyproject, re.MULTILINE)
+    assert declared, "pyproject.toml has no top-level version"
+    assert __version__ == declared.group(1), (
+        f"ubag.__version__ is {__version__}, pyproject says "
+        f"{declared.group(1)}. When these disagree the installed package is not "
+        f"this source tree, and `ubag init --check` reports skills stale that "
+        f"are not.")
