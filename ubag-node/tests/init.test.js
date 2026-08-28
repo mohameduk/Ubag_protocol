@@ -11,7 +11,7 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 
-const { main, install, check, skillVersion, SKILLS, sdkVersion } =
+const { main, install, check, skillVersion, SKILLS, sdkVersion, PLACEHOLDER } =
   require('../src/init');
 
 let root;
@@ -130,6 +130,32 @@ test('--check exits nonzero when stale', () => {
 test('absence is not staleness', () => {
   expect(check(root)).toEqual([]);
   expect(main(['init', '--check', '--dir', root])).toBe(0);
+});
+
+test('a skill goes stale when the SDK moves on', () => {
+  // The regression this whole mechanism exists for, and it was broken. The
+  // stamp used to be a literal in the template, so a skill written one second
+  // ago reported itself stale the moment the package version bumped. A check
+  // that fires on files it just wrote is a check people turn off.
+  install(root, ['publisher'], '0.6.0');
+  expect(check(root, '0.6.0')).toEqual([]);
+  expect(check(root, '0.6.1')).toEqual([{ name: 'ubag-publisher', found: '0.6.0' }]);
+});
+
+test('the placeholder never reaches the written file', () => {
+  for (const { target } of install(root, ['publisher', 'agent'])) {
+    expect(fs.readFileSync(target, 'utf8')).not.toContain(PLACEHOLDER);
+  }
+});
+
+test('the shipped templates still hold the placeholder', () => {
+  // Guards the other direction: bake a literal back in and substitution
+  // silently becomes a no-op with every test above it still green.
+  for (const kind of ['publisher', 'agent']) {
+    const raw = fs.readFileSync(
+      path.join(__dirname, '..', 'src', 'skills', `${kind}.md`), 'utf8');
+    expect(raw).toContain(PLACEHOLDER);
+  }
 });
 
 test('every shipped template carries this version stamp', () => {
