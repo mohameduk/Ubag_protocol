@@ -1,11 +1,11 @@
 # ubag (Python)
 
-**UBAG Web Layer — agent identity and routing at the web edge.** FastAPI / Starlette middleware.
+**UBAG Web Layer: agent identity and routing at the web edge.** FastAPI / Starlette middleware.
 
 When an autonomous agent visits a website, UBAG verifies *who it is* and routes
 accordingly: humans to your normal site, credentialed agents to clean JSON-LD,
 unknown automation to a cryptographic challenge. Identity verification and site
-authorization are separate. Asymmetric by design — agent identity
+authorization are separate. Asymmetric by design, so agent identity
 is an Ed25519 keypair; credentials are ES256 JWTs verifiable via JWKS, no shared
 secrets.
 
@@ -35,7 +35,7 @@ app.add_middleware(
     issuer_key=issuer_private,                  # mints + verifies credentials
     server_secret="a-separate-random-32+char-secret",
     authorize_agent=lambda identity, request: identity["agent_id"] in trusted_agents,
-    # site_meta is OPTIONAL — Branch B auto-extracts structured data from your
+    # site_meta is OPTIONAL. Branch B auto-extracts structured data from your
     # origin's HTML (JSON-LD/OpenGraph/meta). Pass site_meta only to override.
 )
 ```
