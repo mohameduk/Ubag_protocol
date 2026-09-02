@@ -19,8 +19,9 @@ fetch and extract the page   2,695 input tokens   41/63 correct
 ask for the fields             215 input tokens   41/63 correct
 ```
 
-12.5x on gpt-4o-mini, 12.1x on gemini-2.5-flash, accuracy unchanged. `?ubag=lean`
-is a further 2.1x smaller than the enveloped form and carries identical facts.
+12.5x on gpt-4o-mini, 12.1x on gemini-2.5-flash, accuracy unchanged. Since
+S-UX/2.0 the lean shape is the default, a further 2.1x smaller than the
+enveloped form and carrying identical facts.
 
 Those figures come from one measured run in this repo. Treat them as the reason
 to use the layer, not as a guarantee for a site nobody has tested.
@@ -31,20 +32,25 @@ to use the layer, not as a guarantee for a site nobody has tested.
 from ubag import Agent
 
 agent = Agent.generate()
-answer = agent.fields("https://shop.example.com/p/3391",
-                      ["offers.price", "offers.availability"])
+answer = agent.answer("https://shop.example.com/p/3391", "price")
+# {"name": "Manteau laine", "offers.price": "862.00",
+#  "offers.priceCurrency": "EUR", "offers.availability": "in stock"}
 ```
+
+Ask for `price` alone with `fields()` and you get a number with no currency,
+which is not a cheap answer but one you cannot transact on. `answer()` expands
+each field to the entity holding it, which is why it is the one to reach for.
 
 ```js
 const { Agent } = require('ubag-web');
 
 const agent = Agent.generate();
-const answer = await agent.fields('https://shop.example.com/p/3391',
-                                  ['offers.price', 'offers.availability']);
+const answer = await agent.answer('https://shop.example.com/p/3391', 'price');
 ```
 
 | call | returns |
 |---|---|
+| `answer(url, ...)` | the fields plus the entity holding each one, lean. **Start here** |
 | `fields(url, [...])` | only those typed fields, plus the subject they belong to |
 | `manifest(url)` | what the resource can answer, without answering. Cacheable per URL |
 | `full(url)` | the whole payload, for when the answer really is the whole page |
@@ -103,8 +109,17 @@ resource's own URL:
 ?ubag.fields=offers.price,offers.availability
 ?ubag.manifest=1
 ?ubag.fields=price&ubag.profile=auto
-?ubag=lean
+?ubag=envelope     the S-UX/1.1 shape, if you were built against it
 ```
+
+Scoped responses are lean by default in S-UX/2.0: no `@context`, no protocol
+banner, no echoed URL, and enum values read as phrases (`in stock`) rather than
+schema.org URLs. `?ubag=envelope` restores the old shape. That is not
+`?ubag=full`, which means the entire page payload.
+
+`manifest(url)` names the protocol version and lists `ubag:profiles`, the named
+intents this particular resource can answer, so you do not have to guess whether
+a page knows about opening hours before asking.
 
 `ubag.profile=auto` expands each requested leaf to the entity holding it, so a
 price arrives with its currency and a street line arrives as a whole address.

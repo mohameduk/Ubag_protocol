@@ -77,7 +77,8 @@ Any resource served through UBAG answers these on its own URL:
 ?ubag.fields=offers.price,offers.availability   only those typed fields
 ?ubag.manifest=1                                what this resource can answer
 ?ubag.profile=auto                              expand each field to its entity
-?ubag=lean                                      drop the response envelope
+?ubag.profile=price|rating|address|contact|hours   named intents
+?ubag=envelope                                  the S-UX/1.1 enveloped shape
 ?ubag=compact                                   full facts, less duplication
 ```
 

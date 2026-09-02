@@ -89,7 +89,9 @@ test('scoped returns only the requested fields', () => {
   expect(mode).toBe('scoped');
   expect(body.price).toBe('689.00');
   expect(body.priceCurrency).toBe('EUR');
-  expect(body.availability).toBe('https://schema.org/InStock');
+  // S-UX/2.0: the default response is lean, so the enum reads as a phrase
+  // rather than a URL. The canonical form is still one parameter away.
+  expect(body.availability).toBe('in stock');
   expect(body.text_content).toBeUndefined();
 });
 
@@ -293,14 +295,27 @@ test('lean drops the envelope and reads the enum aloud', () => {
   const { body, mode } = shapePayload(PAYLOAD, {
     'ubag.fields': 'availability', 'ubag': 'lean',
   });
-  expect(mode).toBe('lean');
+  // ?ubag=lean is now a no-op rather than an error. Anyone who wrote it against
+  // S-UX/1.1 keeps getting exactly what they asked for.
+  expect(mode).toBe('scoped');
   expect(body.availability).toBe('in stock');
   expect(body['@context']).toBeUndefined();
   expect(body.url).toBeUndefined();
   expect(body.name).toBe('Manteau 3391');   // the anchor is not envelope
 });
 
-test('scoped keeps the canonical url so existing agents keep working', () => {
-  const { body } = shapePayload(PAYLOAD, { 'ubag.fields': 'availability' });
+test('the envelope keeps the canonical url so existing agents keep working', () => {
+  // This used to hold for the default response, and S-UX/2.0 is exactly the
+  // change that stopped that being true. The guarantee itself survives: an
+  // agent built against schema.org URLs asks for the envelope and gets them.
+  //
+  // Renamed rather than deleted, because the promise it protects is still real
+  // and somebody removing ?ubag=envelope should have to fail this test.
+  const { body, mode } = shapePayload(PAYLOAD, {
+    'ubag.fields': 'availability', ubag: 'envelope',
+  });
+  expect(mode).toBe('scoped-envelope');
   expect(body.availability).toBe('https://schema.org/InStock');
+  expect(body['@context']).toBe('https://schema.org');
+  expect(body['ubag:protocol']).toBe('S-UX/2.0');
 });

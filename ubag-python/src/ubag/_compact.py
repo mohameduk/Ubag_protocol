@@ -111,7 +111,7 @@ def compact(payload: dict, prose: str = "") -> dict:
     out: dict[str, Any] = {
         "@context": "https://schema.org",
         "@type": "WebPage",
-        "ubag:protocol": "S-UX/1.1",
+        "ubag:protocol": "S-UX/2.0",
         "url": payload.get("ubag:source", ""),
     }
 

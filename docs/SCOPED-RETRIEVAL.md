@@ -17,7 +17,7 @@ GET /boutique/manteau-3391?ubag.fields=offers.price,offers.availability
 ```json
 {
   "@context": "https://schema.org",
-  "ubag:protocol": "S-UX/1.1",
+  "ubag:protocol": "S-UX/2.0",
   "url": "https://shop.example.com/boutique/manteau-3391",
   "name": "Manteau 3391",
   "offers.price": "689.00",

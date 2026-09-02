@@ -72,16 +72,19 @@ test('answer takes several fields', async () => {
   expect(a.query.startsWith('ubag.fields=price,availability&')).toBe(true);
 });
 
-test('fields is left exactly as it was', async () => {
+test('fields pins lean so the origin version cannot change the shape', async () => {
+  // S-UX/2.0 makes lean the default, but an origin still on 1.1 would answer
+  // the same call with an envelope. Sent explicitly so a caller's result does
+  // not depend on software they do not control.
   const a = recorder();
   await a.fields('https://x.example/p', ['offers.price']);
-  expect(a.query).toBe('ubag.fields=offers.price');
+  expect(a.query).toBe('ubag.fields=offers.price&ubag=lean');
 });
 
 test('what answer actually returns', () => {
   const { body, mode } = shapePayload(PRODUCT,
     { 'ubag.fields': 'price', 'ubag.profile': 'auto', ubag: 'lean' });
-  expect(mode).toBe('auto-lean');
+  expect(mode).toBe('auto');
   expect(body['offers.price']).toBe('862.00');
   expect(body['offers.priceCurrency']).toBe('EUR');
   // Publisher casing. It used to lowercase to offers.pricecurrency, which is

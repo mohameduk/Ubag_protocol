@@ -73,21 +73,24 @@ def test_answer_takes_several_fields():
     assert a.query.startswith("ubag.fields=price,availability&")
 
 
-def test_fields_is_left_exactly_as_it_was():
+def test_fields_pins_lean_so_the_origin_version_cannot_change_the_shape():
     """
-    answer() is additive. Callers who want the enveloped form, or the leaf
-    without its entity, still have it and their requests are unchanged.
+    S-UX/2.0 makes lean the default, but an origin still on 1.1 would answer the
+    same call with an envelope. The SDK sends it explicitly so a caller's result
+    does not depend on software they do not control.
+
+    answer() differs by profile=auto and nothing else.
     """
     a = Recorder()
     a.fields("https://x.example/p", ["offers.price"])
-    assert a.query == "ubag.fields=offers.price"
+    assert a.query == "ubag.fields=offers.price&ubag=lean"
 
 
 def test_what_answer_actually_returns():
     """The query it builds, run through the server side that answers it."""
     body, mode = shape_payload(PRODUCT, {"ubag.fields": "price",
                                          "ubag.profile": "auto", "ubag": "lean"})
-    assert mode == "auto-lean"
+    assert mode == "auto"
     # The currency came along, which is the point.
     assert body["offers.price"] == "862.00"
     assert body["offers.priceCurrency"] == "EUR"
@@ -169,9 +172,15 @@ def test_a_profile_that_is_not_advertised_answers_nothing(name):
         assert not answered, f"{name} answered despite not being advertised"
 
 
-def test_the_manifest_still_says_what_it_always_did():
+def test_the_manifest_names_the_version_and_the_way_back():
+    """
+    The lean response carries no protocol banner, by design. The manifest is
+    where an agent learns which version it is talking to, and now also how to
+    ask for the old shape without reading a changelog.
+    """
     m = manifest(PRODUCT)
-    assert m["ubag:protocol"] == "S-UX/1.1"
+    assert m["ubag:protocol"] == "S-UX/2.0"
+    assert m["ubag:envelope"] == "?ubag=envelope"
     assert "price" in m["ubag:fields"]
     assert m["ubag:full_payload"] == "?ubag=full"
 
