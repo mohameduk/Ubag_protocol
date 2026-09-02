@@ -221,8 +221,35 @@ def manifest(payload: dict) -> dict:
         "url": payload.get("ubag:source", ""),
         "ubag:types": types,
         "ubag:fields": sorted(idx),
+        # Which named intents this particular resource can actually answer.
+        #
+        # The profiles existed and were undiscoverable: an agent had to know the
+        # word "hours" before it could ask for it, and a page with no opening
+        # hours answered a hours request with an unresolved list. Advertising
+        # only the ones that resolve here turns a guess into a lookup, and keeps
+        # the manifest's promise that it says what this resource can answer
+        # rather than what the protocol defines.
+        "ubag:profiles": sorted(
+            name for name in PROFILES
+            if any(_resolvable(idx, key) for key in expand_profiles(payload, [name]))
+        ),
         "ubag:full_payload": "?ubag=full",
     }
+
+
+def _resolvable(idx: dict[str, Any], field: str) -> bool:
+    """
+    Would resolve() find this field. Same matching rule, kept in one place.
+
+    The startswith arm is for the hours profile, whose expanded fields are
+    indexed paths like openingHoursSpecification[1].opens. The index collapses
+    lists, so it holds openinghoursspecification.opens and never the bare
+    container, and a check that only looked downward reported a clinic with
+    published opening hours as unable to answer about them.
+    """
+    key = field.lower().split("[")[0]
+    return (key in idx
+            or any(p.endswith("." + key) or p.startswith(key + ".") for p in idx))
 
 
 def _positional_index(payload: dict) -> dict[str, Any]:
@@ -269,19 +296,32 @@ def _lean_value(value: Any) -> Any:
     return _ENUM_WORDS.get(term.lower()) or _CAMEL.sub(" ", term).lower()
 
 
-def _paths(payload: dict) -> tuple[dict[str, str], set[str]]:
-    """(requested-name -> full dotted path, every full path)."""
+def _paths(payload: dict) -> tuple[dict[str, str], dict[str, str]]:
+    """
+    (requested-name -> lowercase path, lowercase path -> publisher's casing).
+
+    Both halves are needed and they are not the same thing. Matching has to be
+    case-insensitive, because a caller asking for "pricecurrency" should find
+    the field. Answering has to use the casing the publisher wrote, because
+    offers.pricecurrency is not a field name that appears anywhere on their
+    page, and an agent comparing the key it asked for against the key it got
+    back has no way to know those are the same thing.
+
+    The hours profile already worked this way and says so in its own comment.
+    auto_expand did not, so the mode that answer() makes primary was the one
+    returning names nobody wrote.
+    """
     where: dict[str, str] = {}
-    every: set[str] = set()
+    cased: dict[str, str] = {}
     for source in (payload.get("structured_data") or [], payload.get("meta") or {}):
         for path, value in _walk(source):
             if not _keep(value):
                 continue
             low = path.lower()
-            every.add(low)
+            cased.setdefault(low, path)
             where.setdefault(low, low)
             where.setdefault(low.rsplit(".", 1)[-1], low)
-    return where, every
+    return where, cased
 
 
 def auto_expand(payload: dict, fields: list[str]) -> list[str]:
@@ -302,7 +342,8 @@ def auto_expand(payload: dict, fields: list[str]) -> list[str]:
     The root entity is never expanded; that is the full payload with extra
     steps.
     """
-    where, every = _paths(payload)
+    where, cased = _paths(payload)
+    every = set(cased)
     out: list[str] = []
     for raw in fields:
         name = raw.strip()
@@ -320,7 +361,9 @@ def auto_expand(payload: dict, fields: list[str]) -> list[str]:
             # agent could not read off the field names, and the hours profile
             # already drops it.
             and not p.endswith(".@type"))
-        out.extend(siblings or [name])
+        # Sorted on the lowercase path for a stable order, emitted in the
+        # publisher's casing so the key is a name that exists on their page.
+        out.extend([cased[p] for p in siblings] or [name])
     seen: set[str] = set()
     return [f for f in out if not (f.lower() in seen or seen.add(f.lower()))]
 
