@@ -1,11 +1,11 @@
 # ubag (Node)
 
-**UBAG Web Layer — agent identity and routing at the web edge.** Express middleware.
+**UBAG Web Layer: agent identity and routing at the web edge.** Express middleware.
 
 When an autonomous agent visits a website, UBAG verifies *who it is* and routes
 accordingly: humans to your normal site, credentialed agents to clean JSON-LD,
 unknown automation to a cryptographic challenge. Identity verification and site
-authorization are separate. Asymmetric by design — agent identity
+authorization are separate. Asymmetric by design, so agent identity
 is an Ed25519 keypair; credentials are ES256 JWTs verifiable via JWKS, no shared
 secrets.
 
@@ -38,7 +38,7 @@ app.use(ubag({
   issuerKey: ISSUER_PRIVATE,
   serverSecret: 'a-separate-random-32+char-secret',
   authorizeAgent: ({ agentId }) => trustedAgents.has(agentId),
-  // siteMeta is OPTIONAL — Branch B auto-extracts structured data from your
+  // siteMeta is OPTIONAL. Branch B auto-extracts structured data from your
   // origin's HTML (JSON-LD/OpenGraph/meta). Pass siteMeta only to override.
 }));
 ```
