@@ -309,7 +309,7 @@ function manifest(payload) {
   }
   return {
     '@context': 'https://schema.org',
-    'ubag:protocol': 'S-UX/1.1',
+    'ubag:protocol': 'S-UX/2.0',
     url: payload['ubag:source'] || '',
     'ubag:types': [...types].sort(),
     'ubag:fields': Object.keys(idx).sort(),
@@ -325,6 +325,9 @@ function manifest(payload) {
       (name) => expandProfiles(payload, [name]).some((f) => resolvable(idx, f)),
     ).sort(),
     'ubag:full_payload': '?ubag=full',
+    // The way back to the S-UX/1.1 shape, named here so an agent built against
+    // the enveloped form can find it without reading a changelog.
+    'ubag:envelope': '?ubag=envelope',
   };
 }
 
@@ -333,7 +336,7 @@ function resolve(payload, fields, lean = false) {
   const idx = indexFields(payload);
   const out = lean ? {} : {
     '@context': 'https://schema.org',
-    'ubag:protocol': 'S-UX/1.1',
+    'ubag:protocol': 'S-UX/2.0',
     url: payload['ubag:source'] || '',
   };
 
@@ -467,12 +470,27 @@ function expandProfiles(payload, names) {
 /**
  * Choose the representation. Returns { body, mode }.
  *
- * The no-parameter response is the unchanged full payload. Every addition is
- * opt-in, because changing the default would alter the response shape for
- * agents already built against the published format.
+ * The no-parameter response is still the unchanged full payload. What changed
+ * in S-UX/2.0 is the shape of a SCOPED response: asking for fields returns the
+ * lean form, and the envelope is the opt-in.
+ *
+ * That reverses the rule this comment used to state, deliberately. The envelope
+ * repeats on every response four things the caller already has: the @context,
+ * the protocol banner the manifest stated, the URL just requested, and the
+ * schema.org host on every enum value. It is 2.1x the bytes for identical
+ * facts, measured through a live gateway, paid in input tokens per question.
+ *
+ * Keeping it as the default was correct while there were users built against
+ * it. The packages published hours before this changed, with essentially none,
+ * so this is the cheapest the change will ever be.
+ *
+ * ?ubag=envelope restores the S-UX/1.1 shape verbatim. It is not ?ubag=full,
+ * which already means the entire page payload and is a different thing.
  */
 function shapePayload(payload, control = {}) {
-  const lean = control.ubag === 'lean';
+  // An unrecognised value leans, because lean is the default and an
+  // unrecognised value must not silently opt somebody back into the old shape.
+  const lean = String(control.ubag || '').trim().toLowerCase() !== 'envelope';
 
   if ('ubag.manifest' in control) return { body: manifest(payload), mode: 'manifest' };
 
@@ -487,7 +505,7 @@ function shapePayload(payload, control = {}) {
     if (asked.length) {
       return {
         body: resolve(payload, autoExpand(payload, asked), lean),
-        mode: lean ? 'auto-lean' : 'auto',
+        mode: lean ? 'auto' : 'auto-envelope',
       };
     }
   }
@@ -497,7 +515,7 @@ function shapePayload(payload, control = {}) {
     if (expanded.length) {
       const fields = expanded.concat(parseFields(control['ubag.fields'] || ''));
       return { body: resolve(payload, fields, lean),
-               mode: lean ? 'profile-lean' : 'profile' };
+               mode: lean ? 'profile' : 'profile-envelope' };
     }
     // An unrecognised profile name falls through to ubag.fields rather than
     // claiming the mode. Reporting "profile" for a request no profile served
@@ -507,7 +525,7 @@ function shapePayload(payload, control = {}) {
   if ('ubag.fields' in control) {
     return {
       body: resolve(payload, parseFields(control['ubag.fields']), lean),
-      mode: lean ? 'lean' : 'scoped',
+      mode: lean ? 'scoped' : 'scoped-envelope',
     };
   }
   // Unrecognised values fall through rather than erroring. A caller sending a

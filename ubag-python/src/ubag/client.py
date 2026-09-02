@@ -165,8 +165,18 @@ class Agent:
         Anything the page cannot answer comes back under ubag:unresolved rather
         than being silently omitted, so absence stays distinguishable from a
         negative answer.
+
+        Sends ubag=lean explicitly even though S-UX/2.0 makes it the default.
+        The SDK's job is a predictable result, and an origin still on S-UX/1.1
+        would otherwise hand the same call an enveloped response, so the caller
+        would get a different shape depending on software they do not control.
+
+        answer() is the same request plus profile=auto, which expands each field
+        to the entity holding it. Use that one unless you specifically want the
+        bare leaf.
         """
-        return self._get(url, f"ubag.fields={quote(','.join(fields), safe=',.[]')}")
+        joined = quote(",".join(fields), safe=",.[]")
+        return self._get(url, f"ubag.fields={joined}&ubag=lean")
 
     def answer(self, url: str, *fields: str) -> dict[str, Any]:
         """

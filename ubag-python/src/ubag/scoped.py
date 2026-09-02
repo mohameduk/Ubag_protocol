@@ -217,7 +217,7 @@ def manifest(payload: dict) -> dict:
     })
     return {
         "@context": "https://schema.org",
-        "ubag:protocol": "S-UX/1.1",
+        "ubag:protocol": "S-UX/2.0",
         "url": payload.get("ubag:source", ""),
         "ubag:types": types,
         "ubag:fields": sorted(idx),
@@ -234,6 +234,9 @@ def manifest(payload: dict) -> dict:
             if any(_resolvable(idx, key) for key in expand_profiles(payload, [name]))
         ),
         "ubag:full_payload": "?ubag=full",
+        # The way back to the S-UX/1.1 shape, named here so an agent built
+        # against the enveloped form can find it without reading a changelog.
+        "ubag:envelope": "?ubag=envelope",
     }
 
 
@@ -439,7 +442,7 @@ def resolve(payload: dict, fields: list[str], lean: bool = False) -> dict:
     idx = index_fields(payload)
     out: dict[str, Any] = {} if lean else {
         "@context": "https://schema.org",
-        "ubag:protocol": "S-UX/1.1",
+        "ubag:protocol": "S-UX/2.0",
         "url": payload.get("ubag:source", ""),
     }
 
@@ -514,11 +517,29 @@ def shape_payload(payload: dict, control: dict[str, str]) -> tuple[dict, str]:
     """
     Choose the representation. Returns (body, mode).
 
-    The no-parameter response is the unchanged full payload. Every addition is
-    opt-in, because changing the default would alter the response shape for
-    agents already built against the published format.
+    The no-parameter response is still the unchanged full payload. What changed
+    in S-UX/2.0 is the shape of a SCOPED response: asking for fields now returns
+    the lean form, and the envelope is the opt-in.
+
+    That reverses the rule this docstring used to state, and the reversal was
+    deliberate. The envelope repeats, on every single response, four things the
+    caller already has: the @context, the protocol banner the manifest stated,
+    the URL just requested, and the schema.org host on every enum value. It is
+    2.1x the bytes for identical facts, measured through a live gateway, and the
+    caller pays for it in input tokens on every question they ask.
+
+    Keeping it as the default was correct while the packages had users built
+    against it. They were published hours before this changed, with essentially
+    none, so this is the cheapest this change will ever be, and every week of
+    adoption makes it more expensive. Waiting for usage data meant waiting for
+    exactly the people it would break.
+
+    ?ubag=envelope restores the S-UX/1.1 shape verbatim. It is not ?ubag=full,
+    which already means the entire page payload and is a different thing.
     """
-    lean = control.get("ubag") == "lean"
+    # An unrecognised value leans, because lean is the default and an
+    # unrecognised value must not silently opt somebody back into the old shape.
+    lean = (control.get("ubag") or "").strip().lower() != "envelope"
 
     if "ubag.manifest" in control:
         return manifest(payload), "manifest"
@@ -535,20 +556,20 @@ def shape_payload(payload: dict, control: dict[str, str]) -> tuple[dict, str]:
             asked = parse_fields(control.get("ubag.fields", ""))
             if asked:
                 body = resolve(payload, auto_expand(payload, asked), lean=lean)
-                return body, "auto-lean" if lean else "auto"
+                return body, "auto" if lean else "auto-envelope"
 
         expanded = expand_profiles(payload, names)
         if expanded:
             fields = expanded + parse_fields(control.get("ubag.fields", ""))
             return resolve(payload, fields, lean=lean), \
-                "profile-lean" if lean else "profile"
+                "profile" if lean else "profile-envelope"
         # An unrecognised profile name falls through to ubag.fields rather than
         # claiming the mode. Reporting "profile" for a request no profile served
         # would make a typo indistinguishable from a page with no data.
 
     if "ubag.fields" in control:
         body = resolve(payload, parse_fields(control["ubag.fields"]), lean=lean)
-        return body, "lean" if lean else "scoped"
+        return body, "scoped" if lean else "scoped-envelope"
 
     if control.get("ubag") == "compact":
         from ._compact import compact
