@@ -225,20 +225,30 @@ function leanValue(v) {
 }
 
 /** (requested-name -> full dotted path, every full path). */
+/**
+ * { requested-name -> lowercase path, lowercase path -> publisher's casing }.
+ *
+ * Both halves are needed and they are not the same thing. Matching has to be
+ * case-insensitive, so a caller asking for "pricecurrency" finds the field.
+ * Answering has to use the casing the publisher wrote, because
+ * offers.pricecurrency is not a name that appears anywhere on their page, and
+ * an agent comparing the key it asked for against the key it got back cannot
+ * tell those are the same thing.
+ */
 function pathsOf(payload) {
   const where = {};
-  const every = new Set();
+  const cased = {};
   for (const source of [payload.structured_data || [], payload.meta || {}]) {
     for (const [path, value] of walk(source)) {
       if (!keep(value)) continue;
       const low = path.toLowerCase();
-      every.add(low);
+      if (!(low in cased)) cased[low] = path;
       if (!(low in where)) where[low] = low;
       const leaf = low.split('.').pop();
       if (!(leaf in where)) where[leaf] = low;
     }
   }
-  return { where, every };
+  return { where, cased };
 }
 
 /**
@@ -253,7 +263,8 @@ function pathsOf(payload) {
  * The root entity is never expanded; that is the full payload with extra steps.
  */
 function autoExpand(payload, fields) {
-  const { where, every } = pathsOf(payload);
+  const { where, cased } = pathsOf(payload);
+  const every = Object.keys(cased);
   const out = [];
   for (const raw of fields) {
     const name = String(raw).trim();
@@ -262,20 +273,34 @@ function autoExpand(payload, fields) {
       || Object.entries(where).find(([k]) => k.endsWith(`.${key}`))?.[1];
     if (!full || !full.includes('.')) { out.push(name); continue; }
     const owner = full.slice(0, full.lastIndexOf('.'));
-    const siblings = [...every]
+    const siblings = every
       .filter((p) => p.startsWith(`${owner}.`)
         && !p.slice(owner.length + 1).includes('.')
         // @type is plumbing: "offers.@type": "Offer" answers nothing an agent
         // could not read off the field names.
         && !p.endsWith('.@type'))
       .sort();
-    out.push(...(siblings.length ? siblings : [name]));
+    // Sorted on the lowercase path for a stable order, emitted in the
+    // publisher's casing so the key is a name that exists on their page.
+    out.push(...(siblings.length ? siblings.map((p) => cased[p]) : [name]));
   }
   const seen = new Set();
   return out.filter((f) => !seen.has(f.toLowerCase()) && seen.add(f.toLowerCase()));
 }
 
 /** What this resource can answer, without answering anything. */
+/** Would resolve() find this field. Same matching rule, kept in one place. */
+function resolvable(idx, field) {
+  // The startsWith arm is for the hours profile, whose expanded fields are
+  // indexed paths like openingHoursSpecification[1].opens. The index collapses
+  // lists, so it holds openinghoursspecification.opens and never the bare
+  // container, and a check that only looked downward reported a clinic with
+  // published opening hours as unable to answer about them.
+  const key = String(field).toLowerCase().split('[')[0];
+  return key in idx
+    || Object.keys(idx).some((p) => p.endsWith('.' + key) || p.startsWith(key + '.'));
+}
+
 function manifest(payload) {
   const idx = indexFields(payload);
   const types = new Set();
@@ -288,6 +313,17 @@ function manifest(payload) {
     url: payload['ubag:source'] || '',
     'ubag:types': [...types].sort(),
     'ubag:fields': Object.keys(idx).sort(),
+    // Which named intents this particular resource can actually answer.
+    //
+    // The profiles were undiscoverable: an agent had to know the word "hours"
+    // before it could ask for it, and a page with no opening hours answered a
+    // hours request with an unresolved list. Advertising only the ones that
+    // resolve here turns a guess into a lookup, and keeps the manifest's
+    // promise that it says what this resource can answer rather than what the
+    // protocol defines.
+    'ubag:profiles': Object.keys(PROFILES).filter(
+      (name) => expandProfiles(payload, [name]).some((f) => resolvable(idx, f)),
+    ).sort(),
     'ubag:full_payload': '?ubag=full',
   };
 }
@@ -367,6 +403,67 @@ function splitUbagQuery(query) {
   return { control, upstreamQuery: passthrough.toString() };
 }
 
+// Named intents, for the cases that are not structural.
+//
+// autoExpand covers everything schema.org groups onto an entity, which is most
+// of it. These are the few that are genuinely an intent rather than a shape:
+// "contact" spans telephone, email and address, which live on different
+// entities, and "hours" needs every openingHoursSpecification entry with its
+// position, because "when do you open on Saturday" is unanswerable from an
+// index that collapses lists to their first element.
+//
+// Ported from ubag-python, where these shipped and Node's did not. The READMEs
+// on both packages promise an identical, cross-verifiable wire format, and a
+// Python origin answered ?ubag.profile=hours while a Node origin fell through
+// to the full page. Same names, same order, same output.
+const PROFILES = {
+  price: ['price', 'priceCurrency', 'availability'],
+  rating: ['ratingValue', 'reviewCount', 'bestRating'],
+  address: ['streetAddress', 'addressLocality', 'addressRegion', 'postalCode',
+            'addressCountry'],
+  contact: ['telephone', 'email', 'streetAddress', 'addressLocality',
+            'addressCountry'],
+  hours: ['openingHoursSpecification'],
+};
+
+/** Indexed paths in the casing the publisher used, in document order. */
+function positionalPaths(payload) {
+  const out = [];
+  const seen = new Set();
+  const sources = [...(payload.structured_data || []), payload.meta || {}];
+  for (const source of sources) {
+    for (const [path, value] of walkIndexed(source)) {
+      const lowered = path.toLowerCase();
+      if (!keep(value) || seen.has(lowered)) continue;
+      seen.add(lowered);
+      out.push(path);
+    }
+  }
+  return out;
+}
+
+/** Turn profile names into the field list that answers them completely. */
+function expandProfiles(payload, names) {
+  const out = [];
+  for (const raw of names) {
+    const key = String(raw).trim().toLowerCase();
+    const keys = PROFILES[key];
+    if (!keys) continue;
+    if (key === 'hours') {
+      // Publisher casing, not the lowercased index key: the response uses the
+      // requested name verbatim, and openinghoursspecification[1].opens is not
+      // a field name anyone wrote. @type is dropped as plumbing.
+      const hours = positionalPaths(payload).filter(
+        (p) => p.toLowerCase().startsWith('openinghoursspecification[')
+               && !p.toLowerCase().endsWith('.@type'));
+      out.push(...(hours.length ? hours : keys));
+    } else {
+      out.push(...keys);
+    }
+  }
+  return out;
+}
+
 /**
  * Choose the representation. Returns { body, mode }.
  *
@@ -395,6 +492,18 @@ function shapePayload(payload, control = {}) {
     }
   }
 
+  if ('ubag.profile' in control) {
+    const expanded = expandProfiles(payload, parseFields(control['ubag.profile']));
+    if (expanded.length) {
+      const fields = expanded.concat(parseFields(control['ubag.fields'] || ''));
+      return { body: resolve(payload, fields, lean),
+               mode: lean ? 'profile-lean' : 'profile' };
+    }
+    // An unrecognised profile name falls through to ubag.fields rather than
+    // claiming the mode. Reporting "profile" for a request no profile served
+    // would make a typo indistinguishable from a page with no data.
+  }
+
   if ('ubag.fields' in control) {
     return {
       body: resolve(payload, parseFields(control['ubag.fields']), lean),
@@ -408,6 +517,8 @@ function shapePayload(payload, control = {}) {
 
 module.exports = {
   indexFields,
+  PROFILES,
+  expandProfiles,
   manifest,
   resolve,
   subjectOf,

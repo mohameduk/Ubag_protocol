@@ -84,8 +84,8 @@ def test_auto_needs_no_vertical_knowledge():
     body, mode = shape_payload(clinic, {"ubag.fields": "streetAddress",
                                         "ubag.profile": "auto"})
     assert mode == "auto"
-    assert body["address.streetaddress"] == "120 King St W"
-    assert body["address.addresscountry"] == "CA"
+    assert body["address.streetAddress"] == "120 King St W"
+    assert body["address.addressCountry"] == "CA"
 
 
 # ---------------------------------------------------------------------------

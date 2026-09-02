@@ -259,7 +259,7 @@ test('auto expands a price to the offer holding it', () => {
   });
   expect(mode).toBe('auto');
   expect(body['offers.price']).toBe('689.00');
-  expect(body['offers.pricecurrency']).toBe('EUR');
+  expect(body['offers.priceCurrency']).toBe('EUR');
 });
 
 test('auto needs no vertical knowledge', () => {
@@ -277,8 +277,8 @@ test('auto needs no vertical knowledge', () => {
   const { body } = shapePayload(clinic, {
     'ubag.fields': 'streetAddress', 'ubag.profile': 'auto',
   });
-  expect(body['address.streetaddress']).toBe('120 King St W');
-  expect(body['address.addresscountry']).toBe('CA');
+  expect(body['address.streetAddress']).toBe('120 King St W');
+  expect(body['address.addressCountry']).toBe('CA');
 });
 
 test('auto does not open the root entity', () => {

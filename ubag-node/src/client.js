@@ -152,6 +152,38 @@ class Agent {
     return this._get(url, `ubag.fields=${joined}`);
   }
 
+  /**
+   * The same question as fields(), asked the way that actually works.
+   *
+   *   await agent.answer(url, 'price')
+   *   { name: 'Manteau laine', price: '862.00',
+   *     priceCurrency: 'EUR', availability: 'in stock' }
+   *
+   * Two things fields() makes you opt into by hand, and nobody does.
+   *
+   * profile=auto expands each requested leaf to the entity holding it, so a
+   * price arrives with its currency. Asking for `price` alone returns a number
+   * you cannot transact on, which is not a cheap answer but a wrong one waiting
+   * to happen.
+   *
+   * lean drops the per-response envelope: the @context and protocol banner the
+   * manifest already told you, the URL you just requested, and the schema.org
+   * host on enum values, so availability reads 'in stock' rather than
+   * 'https://schema.org/InStock'. Measured 2.1x smaller through a live gateway,
+   * carrying identical facts.
+   *
+   * Field names are kept, because they are what make an answer checkable.
+   * ubag:unresolved is kept for the reason it always was: "this resource says
+   * nothing about price" and "the price is nothing" are different answers.
+   *
+   * fields() is unchanged, for callers who want the enveloped form or the
+   * unexpanded leaf.
+   */
+  async answer(url, ...fields) {
+    const joined = encodeURIComponent(fields.join(',')).replace(/%2C/g, ',');
+    return this._get(url, `ubag.fields=${joined}&ubag.profile=auto&ubag=lean`);
+  }
+
   /** What this page can answer, without answering. Cacheable per URL. */
   async manifest(url) {
     return this._get(url, 'ubag.manifest=1');
