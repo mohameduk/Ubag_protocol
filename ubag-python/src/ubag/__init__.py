@@ -39,6 +39,14 @@ from ubag.provenance import (
     parse_provenance,
     verify_provenance,
 )
+from ubag.webbotauth import (
+    DirectoryFetcher,
+    VerifiedAgent,
+    WebBotAuthError,
+    build_directory,
+    sign_request,
+    verify_web_bot_auth,
+)
 
 # Read from installed metadata rather than restated here.
 #
@@ -92,6 +100,12 @@ __all__ = [
     "create_provenance",
     "parse_provenance",
     "verify_provenance",
+    "verify_web_bot_auth",
+    "VerifiedAgent",
+    "WebBotAuthError",
+    "DirectoryFetcher",
+    "build_directory",
+    "sign_request",
 ]
 
 # Lazy import so FastAPI/Starlette is optional
